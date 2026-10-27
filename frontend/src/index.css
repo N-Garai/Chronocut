@@ -1,0 +1,185 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Space+Grotesk:wght@300;400;500;600;700&family=Abril+Fatface&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --void: #050710;
+  --coal: #0c1648;
+  --carbon: #1628bf;
+  --bone: #eaeaea;
+  --amber: #4ccae5;
+  --cyan: #3199da;
+  --olive: #205fcb;
+  --cream: #24538e;
+  --tan: #4ccae5;
+}
+
+html {
+  background: var(--void);
+  scroll-behavior: auto;
+}
+
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+
+.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}
+
+.lenis.lenis-smooth [data-lenis-prevent] {
+  overscroll-behavior: contain;
+}
+
+.lenis.lenis-stopped {
+  overflow: hidden;
+}
+
+body {
+  @apply bg-void text-bone font-sans antialiased;
+  overflow-x: hidden;
+  font-family: 'Space Grotesk', sans-serif;
+}
+
+@media (pointer: fine) {
+  body { cursor: none !important; }
+}
+
+@media (max-width: 768px) {
+  body { cursor: auto !important; }
+}
+
+::selection {
+  background: var(--amber);
+  color: var(--void);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--coal);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(76, 202, 229, 0.35);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--amber);
+}
+
+@layer components {
+  .text-outline {
+    -webkit-text-stroke: 1px rgba(234, 234, 234, 0.35);
+    color: transparent;
+  }
+
+  .text-outline-amber {
+    -webkit-text-stroke: 1px rgba(76, 202, 229, 0.7);
+    color: transparent;
+  }
+
+  .glass {
+    @apply bg-white/[0.04] backdrop-blur-xl border border-white/10;
+  }
+
+  .clip-mask {
+    overflow: hidden;
+  }
+
+  .magnetic {
+    will-change: transform;
+  }
+
+  .status-chip {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-widest;
+  }
+}
+
+.grain-overlay {
+  pointer-events: none;
+  position: fixed;
+  inset: -50%;
+  z-index: 90;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: 0.04;
+  animation: grain-shift 8s steps(10) infinite;
+}
+
+@keyframes grain-shift {
+  0%, 100% { transform: translate(0, 0); }
+  10% { transform: translate(-5%, -5%); }
+  20% { transform: translate(-10%, 5%); }
+  30% { transform: translate(5%, -10%); }
+  40% { transform: translate(-5%, 15%); }
+  50% { transform: translate(-15%, 5%); }
+  60% { transform: translate(15%, 0%); }
+  70% { transform: translate(0%, 10%); }
+  80% { transform: translate(-5%, 15%); }
+  90% { transform: translate(10%, 10%); }
+}
+
+.terminal-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+.terminal-scroll::-webkit-scrollbar-thumb {
+  background: rgba(76, 202, 229, 0.4);
+}
+
+.split-line,
+.split-char {
+  will-change: transform;
+}
+
+video::-webkit-media-controls {
+  display: none !important;
+}
+
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin-slow {
+  animation: spin-slow 3s linear infinite;
+}
+
+.font-display {
+  font-family: 'Playfair Display', serif;
+}
+
+.font-blackberry {
+  font-family: 'Abril Fatface', serif;
+}
+
+/* Section color themes matching hero video palette (blue/cyan tones) */
+.section-void {
+  background: linear-gradient(135deg, #050710 0%, #0c1648 50%, #050710 100%);
+}
+
+.section-deep {
+  background: linear-gradient(135deg, #0c1648 0%, #1628bf 100%);
+}
+
+.section-ocean {
+  background: linear-gradient(135deg, #1628bf 0%, #205fcb 100%);
+}
+
+.section-sky {
+  background: linear-gradient(135deg, #205fcb 0%, #3199da 100%);
+}
+
+.section-cyan {
+  background: linear-gradient(135deg, #3199da 0%, #4ccae5 100%);
+}
+
+.section-cream {
+  background: linear-gradient(135deg, #24538e 0%, #1628bf 100%);
+}
