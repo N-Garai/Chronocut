@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: chronocut-api
+    runtime: docker
+    plan: free
+    region: oregon
+    branch: main
+    dockerfilePath: Dockerfile
+    dockerContext: .
+    envVars:
+      - key: ENV
+        value: production
+      - key: PORT
+        value: 8000
+      - key: FRONTEND_DIR
+        value: /var/www/html
+      - key: GEMINI_MODEL
+        value: gemini-3.5-flash
+      - key: RENDER_MEMORY_LIMIT_MB
+        value: 512
+      - key: MAX_RENDER_RESOLUTION
+        value: 720
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: PEXELS_API_KEY
+        sync: false
+      - key: FIRESTORE_PROJECT_ID
+        sync: false
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        value: /secrets/service_account.json
+      # HyperFrames (N) kinetic-typography overlay engine — baked into the image
+      # via the Dockerfile; these mirror the image ENV so they are visible/overridable.
+      - key: TEXT_OVERLAY_ENGINE
+        value: hyperframes
+      - key: HYPERFRAMES_BIN
+        value: /usr/local/bin/hyperframes
+      - key: HYPERFRAMES_CHROME_ARGS
+        value: "--no-sandbox --disable-dev-shm-usage --single-process"
+      - key: PRODUCER_LOW_MEMORY_MODE
+        value: "1"
+    healthCheckPath: /health
+    autoDeploy: true
