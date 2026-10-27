@@ -1,0 +1,92 @@
+import logging
+import os
+import subprocess
+import tempfile
+
+from app.config import settings
+
+logger = logging.getLogger("chronocut.tools.reference")
+
+
+def _probe_duration_seconds(path: str) -> float:
+    try:
+        out = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                path,
+            ],
+            capture_output=True, text=True, timeout=60,
+        )
+        return float(out.stdout.strip() or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _extract_audio(video_path: str, audio_path: str) -> bool:
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", video_path,
+                "-vn", "-ac", "1", "-ar", "16000",
+                "-acodec", "pcm_s16le", audio_path,
+            ],
+            capture_output=True, text=True, timeout=600,
+        )
+        return os.path.exists(audio_path)
+    except Exception as e:
+        logger.warning(f"audio extraction failed: {e}")
+        return False
+
+
+def transcribe(audio_path: str, language: str = "en") -> dict:
+    """Transcribe audio to text + segments.
+
+    Prefers local Whisper; falls back to Gemini audio transcription.
+    Returns a dict with keys: full_text, segments, language, duration_seconds.
+    """
+    result: dict = {"full_text": "", "segments": [], "language": language, "duration_seconds": 0.0}
+
+    try:
+        result["duration_seconds"] = _probe_duration_seconds(audio_path)
+    except Exception:
+        pass
+
+    # --- Attempt Whisper ---------------------------------------------------
+    try:
+        import whisper  # lazy import
+
+        model = whisper.load_model(settings.WHISPER_MODEL)
+        wr = model.transcribe(audio_path, language=language if language != "en" else None)
+        segments = [
+            {"start": float(s.get("start", 0.0)), "end": float(s.get("end", 0.0)), "text": (s.get("text") or "").strip()}
+            for s in (wr.get("segments") or [])
+        ]
+        result["full_text"] = wr.get("text", "") or ""
+        result["segments"] = segments
+        result["language"] = wr.get("language", language)
+        return result
+    except ImportError:
+        logger.info("whisper not installed; falling back to Gemini transcription")
+    except Exception as e:
+        logger.warning(f"whisper transcription failed: {e}; falling back to Gemini")
+
+    # --- Fallback: Gemini audio transcription ------------------------------
+    try:
+        from app.tools.audio.transcribe import gemini_audio_transcribe  # lazy import
+
+        g = gemini_audio_transcribe(audio_path, language=language)
+        if g and isinstance(g, dict):
+            result["full_text"] = g.get("full_text", "") or ""
+            result["segments"] = g.get("segments", []) or []
+            result["language"] = g.get("language", language)
+            if not result["duration_seconds"]:
+                result["duration_seconds"] = float(g.get("duration_seconds", 0.0) or 0.0)
+            return result
+    except ImportError:
+        logger.info("gemini_audio_transcribe not available")
+    except Exception as e:
+        logger.warning(f"gemini transcription failed: {e}")
+
+    return result
