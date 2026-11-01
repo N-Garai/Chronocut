@@ -25,7 +25,7 @@ export function normalizeRow(raw) {
         target: o?.target != null ? String(o.target) : '',
       })).filter((o) => o.op)
       : [],
-    // "provider · model" badge for the row (M7: visible model usage).
+    // "provider · model" badge for the row — the model actually answering.
     modelBadge: raw.provider
       ? [raw.provider, raw.model].filter(Boolean).join(' · ')
       : (raw.model ? String(raw.model) : ''),

@@ -248,7 +248,7 @@ async def get_edl_silence(
     min_duration: Optional[float] = None,
     noise_db: Optional[float] = None,
 ):
-    """M6 silence detection endpoint.
+    """Silence detection endpoint.
 
     Runs ffmpeg ``silencedetect`` over the job's narration/audio sources and
     returns qualifying ranges in project seconds — the same ranges the

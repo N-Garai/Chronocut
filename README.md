@@ -83,7 +83,7 @@ backend/
     services/          state store, render records, storage, cleanup, RAG
     tools/
       audio/           transcription, TTS, silence detection
-      footage/         tiered visual resolution (corpus → stock → generated → matte)
+      footage/         tiered visual resolution (corpus → stock → matte)
       llm/             provider abstraction, caching, scoring, governor
       render/          profiles, compiler, ffmpeg assembler
       storyboard/      shot composer
@@ -106,7 +106,7 @@ frontend/
 
 - Python 3.11+ and FFmpeg on the backend host (`ffmpeg` / `ffprobe` on PATH)
 - Node.js 18+ for the frontend
-- Optional: a language-model API key (Meta Model API or Google AI Studio), Pexels key for stock footage
+- Optional: a language-model API key (the hosted Meta Model API); a local open-weights endpoint via `LLM_PROVIDER=local` needs none, Pexels key for stock footage
 
 ### Backend
 
@@ -134,8 +134,8 @@ The frontend talks to `http://localhost:8000` by default (override with `VITE_AP
 ### Tests
 
 ```bash
-# backend (pytest)
-cd backend && python -m pytest
+# backend (pytest; install the test extras first)
+cd backend && pip install -r requirements-dev.txt && python -m pytest
 
 # frontend (vitest: timeline math, commands, history, snapping, agent bridge,
 # telemetry, EDL helpers)
@@ -174,13 +174,13 @@ cd frontend && npm test
 
 ## Models in use
 
-Every generation call goes through one provider layer, and every agent-activity row in the telemetry feed carries the provider and model that produced it (for example `meta · muse-spark-1.3`), so the model actually answering is never a guess.
+Every generation call goes through one provider layer, and every agent-activity row in the telemetry feed carries the provider and model that produced it (for example `meta · meta-llama/Meta-Llama-3.1-8B-Instruct`, or `local · <LOCAL_LLM_MODEL>` when `LLM_PROVIDER=local`), so the model actually answering is never a guess.
 
 | Role | Default model | Where it shows up |
 |------|---------------|-------------------|
-| Script, direction, edit decisions, vision tagging | `meta-llama/Meta-Llama-3.1-8B-Instruct` (Meta Model API / Baseten Muse Spark Open) | `provider` / `model` on each telemetry row |
+| Script, direction, edit decisions, vision tagging | `meta-llama/Meta-Llama-3.1-8B-Instruct` via `META_BASE_URL` (any OpenAI-compatible Meta-model host) | `provider` / `model` on each telemetry row |
 | Speech-to-text | Muse Voice Transcribe, chunked to 10-minute requests | Archivist telemetry rows |
-| Generated B-roll stills | `flux-1-schnell` on Workers AI, per-beat, optional | `scene_caster` telemetry rows |
+| Generated B-roll stills | `flux-1-schnell` on Workers AI, per-beat, optional, off by default | `scene_caster` telemetry rows |
 | Narration | Meta MMS-TTS open weights (`facebook/mms-tts-eng`), local | Narrator agent rows |
 | Fallback text provider | None — deterministic templates when no provider key is configured | Same rows, `provider: meta` or `local` |
 
@@ -196,7 +196,7 @@ Key environment variables (see `backend/.env.example` for the full set):
 |----------|---------|
 | `LLM_PROVIDER` | `meta` (default, OpenAI-compatible endpoint) or `local` |
 | `MODEL_API_KEY` / `META_API_KEY` | Meta Model API key |
-| `META_BASE_URL` | `https://api.baseten.co/v1` |
+| `META_BASE_URL` | `https://inference.baseten.co/v1` |
 | `META_TEXT_MODEL` | `meta-llama/Meta-Llama-3.1-8B-Instruct` |
 | `LOCAL_LLM_BASE_URL` | `http://localhost:11434/v1` |
 | `LOCAL_LLM_MODEL` | `meta-llama/Meta-Llama-3.1-8B-Instruct` |
@@ -221,8 +221,8 @@ The render path continuously guards its memory use: it logs available RAM before
 
 Three independent pieces, all free-tier friendly:
 
-1. **API (one web service).** Build the `backend/` image (`backend/Dockerfile`) and run it with a health check on `/health`. It never serves the frontend. Required variables: `LLM_PROVIDER`, `MODEL_API_KEY` (or `GOOGLE_API_KEY` fallback), `CORS_ORIGINS` (the static site origin), `APP_BASE_URL` (its own public URL, used by the keep-warm self-ping) or `KEEP_WARM=off`, and optionally `FIRESTORE_PROJECT_ID` plus credentials. Without Firestore it persists to a local JSON store, which is fine for a demo but not durable across restarts.
+1. **API (one web service).** Build the `backend/` image (`backend/Dockerfile`) and run it with a health check on `/health`. It never serves the frontend. Required variables: `LLM_PROVIDER`, `MODEL_API_KEY` (omit entirely for a keyless `LLM_PROVIDER=local` setup), `CORS_ORIGINS` (the static site origin), `APP_BASE_URL` (its own public URL, used by the keep-warm self-ping) or `KEEP_WARM=off`, and optionally `FIRESTORE_PROJECT_ID` plus credentials. Without Firestore it persists to a local JSON store, which is fine for a demo but not durable across restarts.
 2. **Frontend (static build).** `cd frontend && npm ci && npm run build`, publish `dist/`. Set `VITE_API_BASE_URL` to the API origin at build time. `frontend/public/_redirects` already provides the SPA fallback so deep links such as `/studio/<id>/timeline` load; most static hosts honour it (or configure the equivalent rewrite).
-3. **Render worker (GitHub Actions).** Set `RENDER_DISPATCHER=actions`, `GH_REPO`, and a fine-grained `GH_DISPATCH_TOKEN` with `actions:write` on the API, and add the repository secrets `FIRESTORE_PROJECT_ID`, `GOOGLE_APPLICATION_CREDENTIALS_JSON` (and `SUPABASE_URL` / `SUPABASE_SERVICE_KEY` when `STORAGE_BACKEND=supabase`). The API then dispatches `chronocut-render` to `.github/workflows/render-worker.yml`, which renders on a 4 vCPU runner and writes the finished file through the configured storage backend. If the dispatch is unavailable the API falls back to an in-process render, so a single service can still produce output on a small job.
+3. **Render worker (GitHub Actions).** Set `RENDER_DISPATCHER=actions`, `GH_REPO`, and a fine-grained `GH_DISPATCH_TOKEN` with `actions:write` on the API, and add the repository secrets `FIRESTORE_PROJECT_ID`, `GOOGLE_APPLICATION_CREDENTIALS_JSON` (and `SUPABASE_URL` / `SUPABASE_SERVICE_KEY` when `STORAGE_BACKEND=supabase`). The API then dispatches `chronocut-render` to `.github/workflows/render-worker.yml`, which renders on the GitHub-hosted runner and writes the finished file through the configured storage backend. If the dispatch is unavailable the API falls back to an in-process render, so a single service can still produce output on a small job.
 
 `.github/workflows/ci.yml` runs backend tests, frontend unit tests and the production build; `keepalive.yml` pings the API every 14 minutes so a free instance does not idle into a cold start.

@@ -32,19 +32,17 @@ export default function Landing() {
       <SmoothScroll />
       <FilmGrain />
       <CustomCursor />
-      <>
-        <Navbar />
-        <main>
-          <Hero />
-          <section className="section-deep" />
-          <Marquee />
-          <section className="section-sky" />
-          <NarrativeScroll />
-          <section className="section-cream" />
-          <Storyboard storyboard={[]} />
-        </main>
-        <Footer />
-      </>
+      <Navbar />
+      <main>
+        <Hero />
+        <section className="section-veil" />
+        <Marquee />
+        <section className="section-dusk" />
+        <NarrativeScroll />
+        <section className="section-ash" />
+        <Storyboard />
+      </main>
+      <Footer />
       <Link
         to="/studio"
         className="fixed bottom-6 left-1/2 z-40 -translate-x-1/2 rounded-full bg-amberglow px-6 py-2.5 font-mono text-[10px] font-bold uppercase tracking-widest2 text-void transition-transform hover:scale-105"

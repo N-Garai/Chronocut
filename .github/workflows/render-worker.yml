@@ -30,20 +30,28 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
           cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install ffmpeg (render path shells out to it)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
 
       - name: Install backend requirements
         working-directory: backend
         run: pip install -r requirements.txt
 
+      # Purely an optimization: pre-pull the Meta MMS-TTS narration weights so
+      # the first render does not pay the download. A failed warm must never
+      # fail the job — the runtime loader would simply download on demand.
       - name: Warm Hugging Face cache (Meta MMS-TTS)
         working-directory: backend
+        continue-on-error: true
         run: |
           python - <<'PY'
-          from transformers import VoxPopuliV2Processor, VoxPopuliV2ForConditionalGeneration
-          VoxPopuliV2Processor.from_pretrained("facebook/mms-tts-eng")
-          VoxPopuliV2ForConditionalGeneration.from_pretrained("facebook/mms-tts-eng")
+          from transformers import VitsModel, AutoTokenizer
+          AutoTokenizer.from_pretrained("facebook/mms-tts-eng")
+          VitsModel.from_pretrained("facebook/mms-tts-eng")
           print("HF cache warmed: facebook/mms-tts-eng")
           PY
 

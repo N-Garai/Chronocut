@@ -30,7 +30,7 @@ export const DEFAULT_SHORTCUTS = [
 
 /** Resolve a key event to a shortcut name using a pending prefix combo. */
 export function resolve(event, prefix = null, shortcuts = DEFAULT_SHORTCUTS) {
-  if (prefix) return null // g-prefixed combos: extend later (P1)
+  if (prefix) return null // g-prefixed combos are reserved for future two-key shortcuts
   for (const s of shortcuts) {
     if (s.combo.some((c) => matchesKeys(event, c))) return s.name
   }

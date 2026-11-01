@@ -316,10 +316,10 @@ class LocalOpenWeightProvider(_OpenAICompatibleProvider):
         )
 
 
-def get_provider() -> LLMProvider:
+def get_provider(provider_name: Optional[str] = None) -> LLMProvider:
     from app.config import settings
 
-    name = (settings.LLM_PROVIDER or "meta").strip().lower()
+    name = ((provider_name or settings.LLM_PROVIDER) or "meta").strip().lower()
     if name == "local":
         return LocalOpenWeightProvider()
     return MetaProvider()

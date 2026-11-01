@@ -7,7 +7,9 @@ logger = logging.getLogger("chronocut.tools.footage.resolver")
 
 
 def _asset_dir() -> str:
-    d = os.path.join(tempfile.gettempdir(), "chronocut_assets")
+    from app.config import settings
+    base = settings.CHRONOCUT_TMP_DIR or tempfile.gettempdir()
+    d = os.path.join(base, "chronocut_assets")
     try:
         os.makedirs(d, exist_ok=True)
     except Exception as e:

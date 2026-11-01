@@ -1,4 +1,4 @@
-import { Github, ArrowUp, SquareTerminal } from 'lucide-react'
+import { ArrowUp, SquareTerminal } from 'lucide-react'
 import Magnetic from './Magnetic'
 
 export default function Footer() {
@@ -33,16 +33,6 @@ export default function Footer() {
                 <ArrowUp size={14} /> Back to top
               </button>
             </Magnetic>
-            <a
-              href="#top"
-              onClick={(e) => {
-                e.preventDefault()
-                scrollTop()
-              }}
-              className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest2 text-ash/40 transition-colors hover:text-cyanglow"
-            >
-              <Github size={13} /> open source · zero-cost stack
-            </a>
           </div>
         </div>
 
@@ -50,7 +40,7 @@ export default function Footer() {
           <span>© 2026 ChronoCut — Autonomous Documentary Orchestrator</span>
           <span className="flex items-center gap-2">
             <SquareTerminal size={12} className="text-amberglow" />
-            Multi-Agent Pipeline · Cloud-Native · Zero-Cost Stack
+            Multi-Agent Pipeline · Cloud-Native · Deterministic Rendering
           </span>
         </div>
       </div>

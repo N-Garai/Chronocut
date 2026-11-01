@@ -83,7 +83,7 @@ export default function AgentTerminal({ play = false, jobStatus, uploading, uplo
       <div className="absolute inset-0 z-0">
         <video
           className="absolute inset-0 h-full w-full object-cover"
-          src="/agent-telemetery.mp4"
+          src="/agent-telemetry.mp4"
           autoPlay
           loop
           muted

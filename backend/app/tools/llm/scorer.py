@@ -4,11 +4,13 @@ from typing import Optional, List, Dict, Any
 logger = logging.getLogger("chronocut.tools.llm.scorer")
 
 
-# 7-dimension scoring rubric. The Meta Model API (Muse Spark Open) is the only
-# provider on the free tier; no provider fallback is enabled unless explicitly
+# 7-dimension scoring rubric. One provider is active per deployment: the hosted
+# Meta Model API by default, or a local open-weights endpoint via
+# LLM_PROVIDER=local. No provider fallback is enabled unless explicitly
 # configured via env.
 def score_provider(task: str, prompt_tokens: int) -> Dict[str, Any]:
     from app.config import settings
+    badge = settings.model_badge
     dims = ["task_fit", "output_quality", "cost", "reliability", "latency", "continuity", "safety"]
     scores = {
         "task_fit": 0.85,
@@ -22,8 +24,8 @@ def score_provider(task: str, prompt_tokens: int) -> Dict[str, Any]:
     overall = round(sum(scores.values()) / len(dims), 3)
     fallback = "cache_or_error"
     return {
-        "provider": "meta",
-        "model": settings.META_TEXT_MODEL,
+        "provider": badge[0],
+        "model": badge[1],
         "score": overall,
         "dimensions": {d: scores[d] for d in dims},
         "cost_cents": 0.0,

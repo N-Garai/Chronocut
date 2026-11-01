@@ -5,15 +5,11 @@
 @tailwind utilities;
 
 :root {
-  --void: #050710;
-  --coal: #0c1648;
-  --carbon: #1628bf;
-  --bone: #eaeaea;
-  --amber: #4ccae5;
-  --cyan: #3199da;
-  --olive: #205fcb;
-  --cream: #24538e;
-  --tan: #4ccae5;
+  /* Shared tokens — mirror the Tailwind theme (amberglow / coal / void).
+     Kept as raw custom properties for the few places plain CSS needs them. */
+  --void: #050505;
+  --coal: #080808;
+  --amber: #ffc300;
 }
 
 html {
@@ -66,7 +62,7 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(76, 202, 229, 0.35);
+  background: rgba(255, 195, 0, 0.35);
   border-radius: 999px;
 }
 
@@ -164,22 +160,16 @@ video::-webkit-media-controls {
   background: linear-gradient(135deg, #050710 0%, #0c1648 50%, #050710 100%);
 }
 
-.section-deep {
-  background: linear-gradient(135deg, #0c1648 0%, #1628bf 100%);
+/* Transition bands between the landing sections — near-black tonal steps
+   that keep the page dark end-to-end and let the amber accents carry color. */
+.section-veil {
+  background: linear-gradient(135deg, #050505 0%, #080808 100%);
 }
 
-.section-ocean {
-  background: linear-gradient(135deg, #1628bf 0%, #205fcb 100%);
+.section-dusk {
+  background: linear-gradient(135deg, #080808 0%, #101010 100%);
 }
 
-.section-sky {
-  background: linear-gradient(135deg, #205fcb 0%, #3199da 100%);
-}
-
-.section-cyan {
-  background: linear-gradient(135deg, #3199da 0%, #4ccae5 100%);
-}
-
-.section-cream {
-  background: linear-gradient(135deg, #24538e 0%, #1628bf 100%);
+.section-ash {
+  background: linear-gradient(135deg, #0c0c0c 0%, #050505 100%);
 }

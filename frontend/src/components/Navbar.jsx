@@ -74,7 +74,7 @@ export default function Navbar() {
             if (location.pathname === '/') scrollToElement('#top')
             else navigate('/#top')
           }}
-          className="flex items-center gap-3 font-heading text-lg font-600 tracking-[0.25em] text-bone"
+          className="flex items-center gap-3 font-heading text-lg font-semibold tracking-[0.25em] text-bone"
         >
           <span className="relative flex h-3 w-3">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amberglow opacity-60" />

@@ -249,7 +249,7 @@ export default function Timeline() {
     toggle_agent: () => setPanelCollapsed((c) => !c),
     split: splitSelection,
     delete: deleteSelection,
-  }), [tl.undo, tl.redo, ui.pps, onZoom, splitSelection, deleteSelection]), () => true)
+  }), [tl.undo, tl.redo, ui.pps, onZoom, splitSelection, deleteSelection]), { enabled: true })
 
   // ---- page states --------------------------------------------------------
   if (jobMissing) return <StateBlock kind="not_found" onBack={() => navigate('/studio')} />

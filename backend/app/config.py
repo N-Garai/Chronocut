@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = Field(default="meta")
     MODEL_API_KEY: Optional[str] = None   # canonical name from the provider docs
     META_API_KEY: Optional[str] = None    # alias accepted for existing setups
-    META_BASE_URL: str = Field(default="https://api.baseten.co/v1")
+    META_BASE_URL: str = Field(default="https://inference.baseten.co/v1")
     META_TEXT_MODEL: str = Field(default="meta-llama/Meta-Llama-3.1-8B-Instruct")
     META_TEXT_FALLBACK_MODELS: str = Field(default="")
     META_ASR_MODEL: str = Field(default="muse-voice-transcribe-1.0")
@@ -129,6 +129,8 @@ class Settings(BaseSettings):
     @property
     def model_badge(self) -> Tuple[str, str]:
         """(provider, model) actually in use — shown in telemetry rows and docs."""
+        if (self.LLM_PROVIDER or "").strip().lower() == "local":
+            return ("local", self.LOCAL_LLM_MODEL or self.META_TEXT_MODEL)
         return ("meta", self.META_TEXT_MODEL)
 
     @property

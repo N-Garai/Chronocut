@@ -24,7 +24,7 @@ services:
       - key: MODEL_API_KEY
         sync: false
       - key: META_BASE_URL
-        value: https://api.meta.ai/v1
+        value: https://inference.baseten.co/v1
       # ---- security / CORS ------------------------------------------------
       # The API never serves the frontend; CORS lists the static-site origin.
       - key: CORS_ORIGINS

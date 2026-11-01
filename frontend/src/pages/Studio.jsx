@@ -26,8 +26,8 @@ export default function Studio() {
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState(null)
   const { events } = useJobEvents(activeJobId)
-  // M9 demo resilience: a pre-rendered demo job id (set via VITE_DEMO_JOB_ID)
-  // can be loaded instantly if the live run fails during the presentation.
+  // A pre-rendered demo job id (set via VITE_DEMO_JOB_ID) can be loaded
+  // instantly when the live run is unavailable during a presentation.
   const demoJobId = import.meta.env.VITE_DEMO_JOB_ID || ''
 
   // Navbar deep links (/#ingest etc.) scroll to their section after arrival.
@@ -43,9 +43,11 @@ export default function Studio() {
   useEffect(() => {
     if (!activeJobId) { setJobStatus(null); setJobOutput(null); return }
     let timer
+    let misses = 0
     const poll = async () => {
       try {
         const data = await getJob(activeJobId)
+        misses = 0
         setJobStatus(data)
         if (data.status === 'COMPLETE' || data.status === 'NEEDS_REVIEW') {
           setJobOutput(data)
@@ -57,8 +59,18 @@ export default function Studio() {
           setUploading(false)
           return
         }
-      } catch { /* net noise — keep polling */ }
-      timer = setTimeout(poll, 1500)
+      } catch {
+        // Occasional net noise gets a grace period, but a persistent miss
+        // (most often a stale or expired job id) surfaces as an error instead
+        // of polling forever.
+        misses += 1
+        if (misses >= 6) {
+          setUploadError('This job is no longer reachable — it may have expired on the server.')
+          setUploading(false)
+          return
+        }
+      }
+      timer = setTimeout(poll, misses >= 2 ? 4000 : 1500)
     }
     poll()
     return () => clearTimeout(timer)

@@ -101,14 +101,15 @@ class LeadOrchestratorAgent:
 
         # Probe LLM availability. Every provider call already retries with
         # backoff and fails over to deterministic templates, so a single transient
-        # 503 at startup must NOT disable LLM for the whole job. Treat the API key
-        # as the source of truth; only go fully zero-LLM when no key is configured.
-        llm_available = bool(settings.provider_api_key)
+        # 503 at startup must NOT disable LLM for the whole job. The API key (or
+        # a local open-weights endpoint via LLM_PROVIDER=local) is the source of
+        # truth; only go fully zero-LLM when neither is configured.
+        llm_available = bool(settings.provider_api_key) or (settings.LLM_PROVIDER or "").strip().lower() == "local"
         try:
             from app.tools.llm.call import validate_model
             vm = await validate_model()
             logger.info(f"validate_model at ingest: {vm}")
-            if vm.get("ok") is False and not settings.provider_api_key:
+            if vm.get("ok") is False and not llm_available:
                 llm_available = False
         except Exception as e:
             logger.warning(f"validate_model probe failed: {e}")

@@ -1,6 +1,6 @@
 /**
- * App.jsx — the app route split.
- * main.jsx owns the BrowserRouter; this module is kept only as a re-export
- * for any legacy imports (Vite dev HMR entry references main.jsx directly).
+ * App.jsx — the application's default route.
+ * The shell and router live at the entry point; this module exposes the
+ * landing route so the default import stays stable.
  */
 export { default } from './pages/Landing'

@@ -110,11 +110,12 @@ async def _meta_network_call(
     max_output_tokens: int,
     media: Optional[List[Dict[str, Any]]],
     json_mode: bool,
+    provider_name: str = "meta",
 ) -> str:
-    """Meta network path (structured output on json_mode; retries inside provider)."""
-    from app.tools.llm.provider import MetaProvider  # lightweight import guard
+    """Configured-provider network path (structured output on json_mode; retries inside the provider)."""
+    from app.tools.llm.provider import get_provider  # lightweight import guard
 
-    provider = MetaProvider()
+    provider = get_provider(provider_name)
     schema = {"name": "chronocut_response", "schema": {"type": "object"}} if json_mode else None
     sem = _get_semaphore()
     limiter = get_rate_limiter()
@@ -134,12 +135,18 @@ async def _meta_network_call(
 
     text = await _run()
     if not text:
-        raise RuntimeError("Meta call returned empty completion")
+        raise RuntimeError("provider call returned empty completion")
     return text
 
 
 def _provider_ready(provider_name: str) -> bool:
-    """True when the configured provider currently has credentials to call."""
+    """True when the configured provider is ready to serve calls.
+
+    The hosted Meta provider requires an API key; a local OpenAI-compatible
+    endpoint (Ollama, LM Studio, llama.cpp, vLLM) is keyless by design.
+    """
+    if (provider_name or "").strip().lower() == "local":
+        return True
     return bool((settings.provider_api_key or "").strip())
 
 
@@ -165,7 +172,10 @@ async def scored_llm_call(
     behavior identical across providers.
     """
     provider_name = (provider or settings.LLM_PROVIDER or "meta").strip().lower()
-    model = settings.META_TEXT_MODEL
+    if provider_name == "local":
+        model = settings.LOCAL_LLM_MODEL
+    else:
+        model = settings.META_TEXT_MODEL
     # Resilience: when the configured provider has no credentials, never
     # silently fall back to another model — degrade to deterministic templates
     # instead (the planner/director already handle that path).
@@ -190,7 +200,8 @@ async def scored_llm_call(
 
     # Estimate + budget guard.
     est_tokens = max(200, len(prompt) // 3 + max_output_tokens)
-    est_cost = _meta_estimated_cost(est_tokens, max_output_tokens)
+    # Local open-weights inference costs nothing; only hosted calls budget.
+    est_cost = 0.0 if provider_name == "local" else _meta_estimated_cost(est_tokens, max_output_tokens)
     try:
         check_budget(job_id, est_cost)
     except BudgetExceededError:
@@ -205,6 +216,7 @@ async def scored_llm_call(
                 prompt, system,
                 agent=agent, tool=tool, temperature=temperature,
                 max_output_tokens=max_output_tokens, media=media, json_mode=json_mode,
+                provider_name=provider_name,
             ),
         )
     except Exception as e:
@@ -217,7 +229,7 @@ async def scored_llm_call(
     duration_ms = int((time.time() - t0) * 1000)
     prompt_tokens = len(prompt) // 4 + sum(len(m["data"]) // 1000 for m in (media or []))
     completion_tokens = len(text) // 4
-    cost_cents = _meta_estimated_cost(prompt_tokens, completion_tokens)
+    cost_cents = 0.0 if provider_name == "local" else _meta_estimated_cost(prompt_tokens, completion_tokens)
     record_call(job_id, agent=agent, tool=tool, model=model,
                 prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                 cost_cents=cost_cents, cached=False, duration_ms=duration_ms)

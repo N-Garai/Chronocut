@@ -9,9 +9,10 @@ __all__ = [
     "get_duration",
 ]
 
-# Module-level, lazily-loaded MMS-TTS model (loaded once per process).
-_TTS_PROCESSOR = None
+# Module-level, lazily-loaded Meta MMS-TTS model (loaded once per process).
+_TTS_TOKENIZER = None
 _TTS_MODEL = None
+_TTS_FAILED = False
 
 
 def get_duration(file_path: str) -> float:
@@ -96,55 +97,77 @@ def whisper_transcribe(file_path: str, language: str = "en", model: str = "base"
 
 
 def _load_tts():
-    """Lazy-load the Meta MMS-TTS model once per process."""
-    global _TTS_PROCESSOR, _TTS_MODEL
+    """Lazy-load the Meta MMS-TTS open weights once per process.
+
+    Per the official model card for ``facebook/mms-tts-*``: ``VitsModel`` +
+    ``AutoTokenizer``, and calling the model on tokenized input returns a
+    ``SpeechOutput`` whose ``waveform`` is a float tensor at
+    ``model.config.sampling_rate``. Loaded once per process; a failed load is
+    marked with a module flag so narration degrades to captions instead of
+    retrying a heavy import on every call.
+    """
+    global _TTS_TOKENIZER, _TTS_MODEL, _TTS_FAILED
+    from app.config import settings
+
     if _TTS_MODEL is not None:
-        return _TTS_PROCESSOR, _TTS_MODEL
+        return _TTS_TOKENIZER, _TTS_MODEL
+    if (settings.TTS_PROVIDER or "mms").strip().lower() != "mms":
+        _TTS_FAILED = True
+        return None, None
     try:
-        from transformers import VoxPopuliV2Processor, VoxPopuliV2ForConditionalGeneration
-        from app.config import settings
-        model_name = getattr(settings, "MMS_TTS_MODEL", "facebook/mms-tts-eng")
-        processor = VoxPopuliV2Processor.from_pretrained(model_name)
-        model = VoxPopuliV2ForConditionalGeneration.from_pretrained(model_name)
-        _TTS_PROCESSOR, _TTS_MODEL = processor, model
-        return processor, model
+        from transformers import VitsModel, AutoTokenizer
+        model_name = settings.MMS_TTS_MODEL or "facebook/mms-tts-eng"
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = VitsModel.from_pretrained(model_name)
+        _TTS_TOKENIZER, _TTS_MODEL = tokenizer, model
+        logger.info(f"MMS-TTS ready: {model_name}")
+        return _TTS_TOKENIZER, _TTS_MODEL
     except Exception as e:
-        logger.warning(f"MMS-TTS model load failed: {e}")
-        _TTS_MODEL = object()  # sentinel: mark attempted
-        _TTS_PROCESSOR = None
+        logger.warning(f"MMS-TTS model load failed ({e}); narration degrades to captions")
+        _TTS_FAILED = True
         return None, None
 
 
-async def synthesize_speech(text: str, language: str = "eng", out_path: Optional[str] = None) -> Optional[str]:
-    """Text-to-speech using Meta MMS-TTS open weights (local, no API key).
+async def synthesize_speech(text: str, language: Optional[str] = None, out_path: Optional[str] = None) -> Optional[str]:
+    """Narration text-to-speech with Meta MMS-TTS open weights (local, keyless).
 
-    Synthesizes ``text`` into ``out_path`` (an MP3/WAV). Returns the path on
-    success, ``None`` if synthesis is unavailable or fails. The model is loaded
-    lazily and cached per process so repeated narration is cheap.
+    Synthesizes ``text`` into ``out_path`` (WAV) and returns that path on
+    success, ``None`` when synthesis is unavailable or fails (callers degrade
+    to captions-only). ``language`` accepts an ISO 639-3 code; mirroring
+    ``MMS_TTS_LANG`` when omitted.
     """
     if not text or not text.strip():
         return None
+    from app.config import settings
+
+    if _TTS_FAILED:
+        return None
+    lang = (language or settings.MMS_TTS_LANG or "eng").strip() or "eng"
     if out_path is None:
         import tempfile
-        out_path = os.path.join(tempfile.gettempdir(), f"chronocut_tts_{abs(hash(text))}.wav")
+        base = settings.CHRONOCUT_TMP_DIR or tempfile.gettempdir()
+        os.makedirs(base, exist_ok=True)
+        out_path = os.path.join(base, f"chronocut_tts_{abs(hash(text))}.wav")
 
-    processor, model = _load_tts()
-    if processor is None or model is object():
-        logger.warning("MMS-TTS unavailable; no audio synthesized")
+    tokenizer, model = _load_tts()
+    if tokenizer is None or model is None:
         return None
     try:
         import torch
         import soundfile as sf
-        import numpy as np
-        lang = getattr(model, "config", None)
-        lang = getattr(lang, "lang", None) or language
-        inputs = processor(text=text, return_tensors="pt", language=language)
+        # MMS-TTS tokenizers take plain text only (no ``language`` kwarg); the
+        # per-language checkpoint selection is done through the model id.
+        inputs = tokenizer(text, return_tensors="pt")
         with torch.no_grad():
-            output = model.generate(**inputs)
-        audio = output[0].cpu().numpy().astype(np.float32)
+            outputs = model(**inputs).waveform
+        audio = outputs.squeeze(0).float().cpu().numpy()
         sampling_rate = getattr(model.config, "sampling_rate", 16000)
         sf.write(out_path, audio, sampling_rate)
         if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            logger.info(
+                f"MMS-TTS narration written: {len(text)} chars, "
+                f"{sampling_rate} Hz, model={settings.MMS_TTS_MODEL} (lang={lang})"
+            )
             return out_path
     except Exception as e:
         logger.warning(f"MMS-TTS synthesis failed: {e}")

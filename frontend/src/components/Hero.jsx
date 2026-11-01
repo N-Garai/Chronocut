@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import gsap from 'gsap'
 import { ScrollTrigger } from 'gsap/ScrollTrigger'
 import { Play, ArrowDown, Radio } from 'lucide-react'
@@ -71,12 +72,10 @@ export default function Hero({ videoSrc = HERO_VIDEO, showVideo = true }) {
     return () => ctx.revert()
   }, [])
 
-  const scrollToIngest = () => {
-    const el = document.querySelector('#ingest')
-    const lenis = window.__lenis
-    if (lenis) lenis.scrollTo(el, { offset: -30 })
-    else el && el.scrollIntoView({ behavior: 'smooth' })
-  }
+  const navigate = useNavigate()
+  // The ingest dock lives on the studio route, so the primary CTA routes
+  // there; the studio page handles the smooth scroll to the section.
+  const scrollToIngest = () => navigate('/studio#ingest')
 
   return (
     <section
@@ -95,6 +94,7 @@ export default function Hero({ videoSrc = HERO_VIDEO, showVideo = true }) {
             muted
             playsInline
             preload="auto"
+            aria-hidden="true"
           />
         )}
         {!showVideo && <CanvasField className="h-full w-full" />}
@@ -106,7 +106,7 @@ export default function Hero({ videoSrc = HERO_VIDEO, showVideo = true }) {
         <div className="absolute left-6 top-24 sm:left-10">
           <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest3 text-cyanglow">
             <Radio size={12} className="animate-pulse-soft" />
-            SWARM ONLINE — 4 AGENTS ACTIVE
+            AGENT SWARM ONLINE
           </div>
           <div className="mt-2 font-mono text-[10px] uppercase tracking-widest2 text-ash/50">
             Autonomous Swarm · Background Processing · Deterministic Graph
@@ -145,7 +145,7 @@ export default function Hero({ videoSrc = HERO_VIDEO, showVideo = true }) {
           style={{ opacity: 0 }}
         >
           <p className="font-blackberry text-[clamp(1.4rem,3vw,2.2rem)] leading-snug text-bone/90">
-            Theme is art
+            Drop the raw footage — the swarm writes, sources, and cuts the story for you.
           </p>
         </div>
 

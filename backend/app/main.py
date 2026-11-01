@@ -50,10 +50,13 @@ _setup_logging()
 
 app = FastAPI(title="ChronoCut API", version="2.0.0")
 
+_cors_origins = settings.cors_origin_list or ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    # "*" combined with credentials is rejected by browsers; credentials are
+    # only sent when the origins are explicitly pinned via CORS_ORIGINS.
+    allow_credentials=bool(settings.cors_origin_list),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -101,8 +104,14 @@ async def _startup():
         pk = settings.PEXELS_API_KEY
         logger.info("=== ChronoCut startup diagnostics ===")
         logger.info(f"LLM provider: {settings.LLM_PROVIDER}")
-        logger.info(f"provider text model: {settings.META_TEXT_MODEL}")
-        logger.info(f"{settings.LLM_PROVIDER.upper()}_API_KEY present: {bool(mk)} (ends …{mk[-4:] if mk else 'NONE'})")
+        logger.info(f"provider text model: {settings.model_badge[1]}")
+        if (settings.LLM_PROVIDER or "").strip().lower() == "local":
+            logger.info(
+                f"LOCAL_LLM_BASE_URL: {settings.LOCAL_LLM_BASE_URL} "
+                f"(LOCAL_LLM_MODEL: {settings.LOCAL_LLM_MODEL})"
+            )
+        else:
+            logger.info(f"provider API key present: {bool(mk)} (ends …{mk[-4:] if mk else 'NONE'})")
         logger.info(f"PEXELS_API_KEY present: {bool(pk)} (ends …{pk[-4:] if pk else 'NONE'})")
         from app.tools.llm.call import validate_model
         res = await validate_model()
@@ -204,7 +213,7 @@ async def root():
 @app.get("/health")
 async def health():
     llm_provider = (settings.LLM_PROVIDER or "meta").strip().lower()
-    active_model = settings.META_TEXT_MODEL
+    active_model = settings.model_badge[1]
     return {
         "status": "ok",
         "service": "chronocut-api",
