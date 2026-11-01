@@ -8,7 +8,7 @@ import Marquee from '../components/Marquee'
 import NarrativeScroll from '../components/NarrativeScroll'
 import Storyboard from '../components/Storyboard'
 import Footer from '../components/Footer'
-import { Link, useLocation } from 'react-router-dom'
+import { useLocation } from 'react-router-dom'
 
 /**
  * Landing — the marketing page.
@@ -43,12 +43,6 @@ export default function Landing() {
         <Storyboard />
       </main>
       <Footer />
-      <Link
-        to="/studio"
-        className="fixed bottom-6 left-1/2 z-40 -translate-x-1/2 rounded-full bg-amberglow px-6 py-2.5 font-mono text-[10px] font-bold uppercase tracking-widest2 text-void transition-transform hover:scale-105"
-      >
-        Open Studio →
-      </Link>
     </div>
   )
 }

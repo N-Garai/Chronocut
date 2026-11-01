@@ -1,16 +1,36 @@
-import { ImageIcon, Music, Film, FileArchive } from 'lucide-react'
+import { Home, ImageIcon, Music, Film, FileArchive, MonitorPlay } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 
 /**
  * AssetBin — job sources from the EDL, enriched with the asset endpoint's
  * thumbnails and on-disk availability. A source with no preview row still
  * renders (icon + name), so the bin never depends on the extra metadata.
+ * The panel rail also carries the only navigation out of the editor, so the
+ * workspace itself stays distraction-free like a full-screen editing suite.
  */
 export default function AssetBin({ sources, assets = [], onSelect }) {
+  const navigate = useNavigate()
   const icons = { image: ImageIcon, audio: Music, narration: Music, music: Music, video: Film }
   const byId = new Map((assets || []).map((a) => [String(a.asset_id || a.id), a]))
 
   return (
     <aside className="flex h-full flex-col gap-2 overflow-y-auto border-r border-white/10 bg-carbon/40 p-3" data-lenis-prevent="true">
+      <div className="mb-1 flex gap-1.5">
+        <button
+          onClick={() => navigate('/')}
+          className="flex flex-1 items-center justify-center gap-1.5 rounded border border-white/10 bg-white/[0.03] px-2 py-1.5 font-mono text-[9px] uppercase tracking-widest text-white/60 transition-colors hover:border-amberglow/60 hover:text-amberglow"
+          title="Back to the ChronoCut home page"
+        >
+          <Home size={12} /> home
+        </button>
+        <button
+          onClick={() => navigate('/studio')}
+          className="flex flex-1 items-center justify-center gap-1.5 rounded border border-white/10 bg-white/[0.03] px-2 py-1.5 font-mono text-[9px] uppercase tracking-widest text-white/60 transition-colors hover:border-amberglow/60 hover:text-amberglow"
+          title="Back to the studio"
+        >
+          <MonitorPlay size={12} /> studio
+        </button>
+      </div>
       <span className="font-mono text-[10px] uppercase tracking-widest text-white/50">assets ({sources.length})</span>
       {sources.length === 0 && (
         <p className="font-mono text-[10px] leading-relaxed text-white/35">

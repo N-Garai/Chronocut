@@ -142,7 +142,7 @@ export default function Storyboard() {
         <div className="flex items-end justify-between px-6 pb-4 pt-14 md:pt-16">
           <div className="px-2">
             <span className="font-mono text-[11px] uppercase tracking-widest3 text-cyanglow">
-              [ 05 · STORYBOARD TIMELINE ]
+              [ II · STORYBOARD TIMELINE ]
             </span>
             <RevealText className="mt-3 font-display text-[clamp(2.2rem,6vw,4.5rem)] leading-none text-bone">
               RAW TO REEL

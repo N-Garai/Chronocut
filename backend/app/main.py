@@ -3,6 +3,7 @@ import io
 import zipfile
 import logging
 import requests
+from contextlib import asynccontextmanager
 from logging.handlers import TimedRotatingFileHandler
 import uuid
 import asyncio
@@ -48,7 +49,17 @@ def _setup_logging():
 
 _setup_logging()
 
-app = FastAPI(title="ChronoCut API", version="2.0.0")
+# Modern FastAPI lifespan handler — the legacy ``@app.on_event`` decorators
+# emit DeprecationWarnings on current FastAPI releases. The body runs after
+# this module finishes importing, so the names it calls are all resolvable.
+@asynccontextmanager
+async def lifespan(_app):
+    await _startup()
+    yield
+    await _shutdown()
+
+
+app = FastAPI(title="ChronoCut API", version="2.0.0", lifespan=lifespan)
 
 _cors_origins = settings.cors_origin_list or ["*"]
 app.add_middleware(
@@ -71,7 +82,6 @@ from app.api.agent import router as agent_router
 app.include_router(agent_router)
 
 
-@app.on_event("startup")
 async def _startup():
     # Free-tier hygiene on boot: drop stale media + expired metadata so the
     # container's ephemeral disk and Firestore free quota stay bounded.
@@ -147,7 +157,6 @@ async def _startup():
         logger.warning(f"HyperFrames probe skipped: {e}")
 
 
-@app.on_event("shutdown")
 async def _shutdown():
     try:
         await runner.stop()
@@ -196,7 +205,7 @@ def _start_keep_warm():
     logger.info("keep-warm started -> %s/health every 13.5 min", base_url)
 
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 async def root():
     """API root descriptor. The FastAPI process serves no frontend; the app
     itself is a static build hosted separately (see README architecture)."""

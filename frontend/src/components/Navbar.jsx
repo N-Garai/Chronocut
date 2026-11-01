@@ -2,16 +2,23 @@ import { useEffect, useRef, useState } from 'react'
 import gsap from 'gsap'
 import Magnetic from './Magnetic'
 import { useLocation, useNavigate } from 'react-router-dom'
+import { useStudio } from '../studio/StudioProvider'
 
-// Route-aware anchors: Ingest/Swarm/Output live on the Studio page,
-// Storyboard stays on the marketing landing page. On the right route the
-// navbar scrolls; otherwise it navigates (the destination page scrolls to the
-// hash when it mounts).
-const LINKS = [
-  { label: 'Ingest', route: '/studio', hash: 'ingest' },
-  { label: 'Swarm', route: '/studio', hash: 'swarm' },
-  { label: 'Storyboard', route: '/', hash: 'storyboard' },
-  { label: 'Output', route: '/studio', hash: 'output' },
+// Route-aware navigation. The landing page links to the narrative surfaces;
+// the studio page links to the working sections. On the right route the navbar
+// scrolls; otherwise it navigates (the destination page scrolls to the hash
+// when it mounts). Section badges stay unique per page: the studio numbers its
+// own sections 01–03, the landing page continues at 04–05.
+const LANDING_LINKS = [
+  { label: 'Meet Your Agent Teams', hash: 'narrative' },
+  { label: 'Storyboard', hash: 'storyboard' },
+]
+
+const STUDIO_LINKS = [
+  { label: 'Ingest', hash: 'ingest' },
+  { label: 'Agent Telemetry', hash: 'swarm' },
+  { label: 'Editor Mode', timeline: true },
+  { label: 'Output', hash: 'output' },
 ]
 
 /**
@@ -22,6 +29,10 @@ export default function Navbar() {
   const [hidden, setHidden] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
+  const { activeJobId } = useStudio()
+
+  const onStudio = location.pathname.startsWith('/studio')
+  const links = onStudio ? STUDIO_LINKS : LANDING_LINKS
 
   useEffect(() => {
     let lastY = window.scrollY
@@ -52,14 +63,23 @@ export default function Navbar() {
     else el.scrollIntoView({ behavior: 'smooth' })
   }
 
-  const go = (e, item) => {
+  const goHash = (e, hash) => {
     e.preventDefault()
-    if (location.pathname === item.route) {
-      scrollToElement(`#${item.hash}`)
-    } else {
-      navigate(`${item.route}#${item.hash}`)
-    }
+    if (location.pathname === '/') scrollToElement(`#${hash}`)
+    else navigate(`/#${hash}`)
   }
+
+  const openEditor = (e) => {
+    e.preventDefault()
+    if (activeJobId) navigate(`/studio/${activeJobId}/timeline`)
+  }
+
+  const go = (e, item) => {
+    if (item.timeline) return openEditor(e)
+    goHash(e, item.hash)
+  }
+
+  const isEditorDisabled = onStudio && !activeJobId
 
   return (
     <header
@@ -85,12 +105,21 @@ export default function Navbar() {
       </Magnetic>
 
       <nav className="hidden items-center gap-8 md:flex">
-        {LINKS.map((item) => (
+        {links.map((item) => (
           <a
-            key={item.hash}
-            href={`${item.route}#${item.hash}`}
+            key={item.label}
+            href={item.timeline ? '/studio' : `/#${item.hash}`}
             onClick={(e) => go(e, item)}
-            className="group relative font-mono text-[11px] uppercase tracking-widest2 text-ash/70 transition-colors hover:text-amberglow"
+            title={
+              item.timeline && isEditorDisabled
+                ? 'Create a job first — the editor opens on its timeline'
+                : undefined
+            }
+            className={`group relative font-mono text-[11px] uppercase tracking-widest2 transition-colors hover:text-amberglow ${
+              isEditorDisabled && item.timeline
+                ? 'cursor-not-allowed text-ash/30'
+                : 'text-ash/70'
+            }`}
           >
             {item.label}
             <span className="absolute -bottom-1 left-0 h-px w-0 bg-amberglow transition-all duration-300 group-hover:w-full" />
@@ -100,11 +129,15 @@ export default function Navbar() {
 
       <Magnetic strength={0.3}>
         <a
-          href="/studio#ingest"
-          onClick={(e) => go(e, LINKS[0])}
-          className="hidden rounded-full border border-white/20 px-5 py-2 font-mono text-[10px] uppercase tracking-widest2 text-bone transition-colors hover:border-amberglow hover:text-amberglow sm:block"
+          href={onStudio ? '/#top' : '/studio#ingest'}
+          onClick={(e) => {
+            e.preventDefault()
+            if (onStudio) navigate('/#top')
+            else navigate('/studio#ingest')
+          }}
+          className="rounded-full border border-white/20 px-5 py-2 font-mono text-[10px] uppercase tracking-widest2 text-bone transition-colors hover:border-amberglow hover:text-amberglow sm:block"
         >
-          Deploy Folder
+          {onStudio ? 'Home' : 'Open Studio'}
         </a>
       </Magnetic>
     </header>

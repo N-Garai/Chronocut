@@ -144,7 +144,7 @@ export default function NarrativeScroll() {
       <div className="relative z-10 mx-auto max-w-7xl px-6 sm:px-10">
         <div className="mb-16">
           <span className="font-mono text-[11px] uppercase tracking-widest3 text-cyanglow">
-            [ 04 · THE PIPELINE ]
+            [ I · THE PIPELINE ]
           </span>
           <RevealText className="mt-4 font-display text-[clamp(2.5rem,7vw,5.5rem)] leading-[0.9] text-bone">
             HOW THE SWARM WORKS
