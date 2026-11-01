@@ -72,14 +72,13 @@ export default function Navbar() {
   const openEditor = (e) => {
     e.preventDefault()
     if (activeJobId) navigate(`/studio/${activeJobId}/timeline`)
+    else navigate('/studio#ingest') // no job yet → land on the ingestion dock
   }
 
   const go = (e, item) => {
     if (item.timeline) return openEditor(e)
     goHash(e, item.hash)
   }
-
-  const isEditorDisabled = onStudio && !activeJobId
 
   return (
     <header
@@ -105,26 +104,26 @@ export default function Navbar() {
       </Magnetic>
 
       <nav className="hidden items-center gap-8 md:flex">
-        {links.map((item) => (
-          <a
-            key={item.label}
-            href={item.timeline ? '/studio' : `/#${item.hash}`}
-            onClick={(e) => go(e, item)}
-            title={
-              item.timeline && isEditorDisabled
-                ? 'Create a job first — the editor opens on its timeline'
-                : undefined
-            }
-            className={`group relative font-mono text-[11px] uppercase tracking-widest2 transition-colors hover:text-amberglow ${
-              isEditorDisabled && item.timeline
-                ? 'cursor-not-allowed text-ash/30'
-                : 'text-ash/70'
-            }`}
-          >
-            {item.label}
-            <span className="absolute -bottom-1 left-0 h-px w-0 bg-amberglow transition-all duration-300 group-hover:w-full" />
-          </a>
-        ))}
+        {links.map((item) => {
+          // The editor opens on a job's timeline; without an active job the
+          // link still responds — it walks the user to the ingest dock instead
+          // of dying silently.
+          const noJob = item.timeline && !activeJobId
+          return (
+            <a
+              key={item.label}
+              href={item.timeline ? (noJob ? '/studio#ingest' : `/studio/${activeJobId}/timeline`) : `/#${item.hash}`}
+              onClick={(e) => go(e, item)}
+              title={noJob ? 'Create a job first — your next click opens the ingestion dock' : undefined}
+              className={`group relative font-mono text-[11px] uppercase tracking-widest2 transition-colors ${
+                noJob ? 'text-ash/40 hover:text-ash/80' : 'text-ash/70 hover:text-amberglow'
+              }`}
+            >
+              {item.label}
+              <span className="absolute -bottom-1 left-0 h-px w-0 bg-amberglow transition-all duration-300 group-hover:w-full" />
+            </a>
+          )
+        })}
       </nav>
 
       <Magnetic strength={0.3}>
