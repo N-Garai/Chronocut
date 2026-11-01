@@ -89,7 +89,7 @@ async def analyze_reference(url: str, job_id: str = None) -> dict:
 
         # Summarize a brief via LLM
         try:
-            from app.tools.llm.call import scored_gemini_json
+            from app.tools.llm.call import scored_llm_json
 
             summary_prompt = (
                 "Analyze this documentary reference material and return JSON with keys:\n"
@@ -99,7 +99,7 @@ async def analyze_reference(url: str, job_id: str = None) -> dict:
                 f"Transcript:\n{brief['transcript'][:4000]}\n\n"
                 f"Keyframe descriptions:\n" + "\n".join(brief["keyframe_descriptions"])
             )
-            summary = await scored_gemini_json(
+            summary = await scored_llm_json(
                 summary_prompt,
                 agent="reference",
                 tool="reference_summarize",

@@ -40,8 +40,9 @@ def build_spec(
 ) -> List[Dict[str, Any]]:
     """Turn the storyboard into a list of timed overlay descriptors.
 
-    Each: {kind, text, start, end, words?} where words is the edge-tts
-    word-boundary list (N4 karaoke) when a sidecar exists.
+    Each: {kind, text, start, end}. ``words`` is intentionally omitted: MMS-TTS
+    narration produces per-phrase audio but no word-boundary timings, so captions
+    render as whole phrases (per-phrase timing) rather than karaoke word sync.
     """
     from app.config import settings
     spec: List[Dict[str, Any]] = []
@@ -61,18 +62,10 @@ def build_spec(
         txt = shot.get("overlay_text")
         if not txt or not str(txt).strip():
             continue
-        words = None
-        wj = os.path.join(narration_dir, f"{shot.get('shot_id')}.mp3.words.json")
-        if os.path.exists(wj):
-            try:
-                with open(wj, encoding="utf-8") as f:
-                    words = json.load(f).get("words")
-            except Exception:
-                words = None
+        # Per-phrase timing: the whole caption spans the shot duration.
         spec.append({
             "kind": "lower", "text": str(txt).strip(),
             "start": round(start, 2), "end": round(start + dur, 2),
-            "words": words,
         })
 
     # End card.
@@ -100,18 +93,10 @@ def write_composition(spec: List[Dict[str, Any]], width: int, height: int,
                     f'<div class="kinetic" style="animation:{anim}">{_esc(o["text"])}</div>'
                 )
             else:
-                # lower-third; karaoke if word timings are present.
+                # lower-third; whole-phrase timing (per-phrase caption timing).
                 out_t = max(start, end - 0.4)
                 anim = f"inUp .4s ease both {start:.2f}s, outUp .4s ease both {out_t:.2f}s"
-                if o.get("words"):
-                    inner = ""
-                    for w in o["words"]:
-                        ws = start + float(w.get("start", 0))
-                        we = start + float(w.get("end", 0))
-                        inner += (f'<span class="w" style="animation:wOn .12s both {ws:.2f}s, '
-                                  f'wOff .12s both {we:.2f}s">{_esc(w.get("word", ""))} </span>')
-                else:
-                    inner = _esc(o["text"])
+                inner = _esc(o["text"])
                 blocks.append(f'<div class="lower" style="animation:{anim}">{inner}</div>')
 
         css = f"""
@@ -126,13 +111,10 @@ def write_composition(spec: List[Dict[str, Any]], width: int, height: int,
         .kinetic{{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);
           text-align:center;color:#fff;font:800 {fk}px/1.15 'Segoe UI',Arial,sans-serif;
           text-shadow:0 4px 24px rgba(0,0,0,.7);padding:0 6%;}}
-        .w{{color:#fff;}}
         @keyframes inUp{{from{{opacity:0;transform:translateY(24px)}}to{{opacity:1;transform:translateY(0)}}}}
         @keyframes outUp{{from{{opacity:1;transform:translateY(0)}}to{{opacity:0;transform:translateY(-18px)}}}}
         @keyframes kIn{{from{{opacity:0;transform:translateY(-50%) scale(.82)}}to{{opacity:1;transform:translateY(-50%) scale(1)}}}}
         @keyframes kOut{{from{{opacity:1;transform:translateY(-50%) scale(1)}}to{{opacity:0;transform:translateY(-50%) scale(1.08)}}}}
-        @keyframes wOn{{to{{color:#ffd54a;}}}}
-        @keyframes wOff{{to{{color:#fff;}}}}
         """
         html = (
             "<!doctype html><html lang='en'><head><meta charset='utf-8'>"

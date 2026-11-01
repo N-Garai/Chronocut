@@ -7,7 +7,7 @@ __all__ = ["run_self_review"]
 
 
 async def run_self_review(video_path: str, declared_duration: float, job_id: Optional[str] = None) -> Dict[str, Any]:
-    """Mandatory quality gate (M4). Returns PASS | NEEDS_REVIEW | FAIL."""
+    """Mandatory quality gate. Returns PASS | NEEDS_REVIEW | FAIL."""
     from app.tools.review.ffprobe import ffprobe_check
     from app.tools.review.frame_sampler import frame_sampler
     from app.tools.review.audio_levels import audio_levels

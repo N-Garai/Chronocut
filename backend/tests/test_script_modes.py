@@ -24,8 +24,8 @@ def test_prompt_mode_injects_rag_context():
             "total_duration_seconds": 60, "voiceover_notes": "n", "narrative_arc": ["hook"],
         }
 
-    original = callmod.scored_gemini_json
-    callmod.scored_gemini_json = fake
+    original = callmod.scored_llm_json
+    callmod.scored_llm_json = fake
     try:
         out = asyncio.run(
             sw.script_from_prompt(
@@ -34,7 +34,7 @@ def test_prompt_mode_injects_rag_context():
             )
         )
     finally:
-        callmod.scored_gemini_json = original
+        callmod.scored_llm_json = original
 
     assert "Past project" in captured["prompt"]
     assert out["script"][0]["text"] == "t"

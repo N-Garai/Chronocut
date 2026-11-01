@@ -1,12 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import gsap from 'gsap'
 import Magnetic from './Magnetic'
+import { useLocation, useNavigate } from 'react-router-dom'
 
-const links = [
-  { label: 'Ingest', href: '#ingest' },
-  { label: 'Swarm', href: '#swarm' },
-  { label: 'Storyboard', href: '#storyboard' },
-  { label: 'Output', href: '#output' },
+// Route-aware anchors: Ingest/Swarm/Output live on the Studio page,
+// Storyboard stays on the marketing landing page. On the right route the
+// navbar scrolls; otherwise it navigates (the destination page scrolls to the
+// hash when it mounts).
+const LINKS = [
+  { label: 'Ingest', route: '/studio', hash: 'ingest' },
+  { label: 'Swarm', route: '/studio', hash: 'swarm' },
+  { label: 'Storyboard', route: '/', hash: 'storyboard' },
+  { label: 'Output', route: '/studio', hash: 'output' },
 ]
 
 /**
@@ -15,6 +20,8 @@ const links = [
 export default function Navbar() {
   const ref = useRef(null)
   const [hidden, setHidden] = useState(false)
+  const location = useLocation()
+  const navigate = useNavigate()
 
   useEffect(() => {
     let lastY = window.scrollY
@@ -37,13 +44,21 @@ export default function Navbar() {
     })
   }, [hidden])
 
-  const scrollTo = (e, href) => {
-    e.preventDefault()
+  const scrollToElement = (href) => {
     const el = document.querySelector(href)
     if (!el) return
     const lenis = window.__lenis
     if (lenis) lenis.scrollTo(el, { offset: -20 })
     else el.scrollIntoView({ behavior: 'smooth' })
+  }
+
+  const go = (e, item) => {
+    e.preventDefault()
+    if (location.pathname === item.route) {
+      scrollToElement(`#${item.hash}`)
+    } else {
+      navigate(`${item.route}#${item.hash}`)
+    }
   }
 
   return (
@@ -53,8 +68,12 @@ export default function Navbar() {
     >
       <Magnetic strength={0.2}>
         <a
-          href="#top"
-          onClick={(e) => scrollTo(e, '#top')}
+          href="/#top"
+          onClick={(e) => {
+            e.preventDefault()
+            if (location.pathname === '/') scrollToElement('#top')
+            else navigate('/#top')
+          }}
           className="flex items-center gap-3 font-heading text-lg font-600 tracking-[0.25em] text-bone"
         >
           <span className="relative flex h-3 w-3">
@@ -66,14 +85,14 @@ export default function Navbar() {
       </Magnetic>
 
       <nav className="hidden items-center gap-8 md:flex">
-        {links.map((l) => (
+        {LINKS.map((item) => (
           <a
-            key={l.href}
-            href={l.href}
-            onClick={(e) => scrollTo(e, l.href)}
+            key={item.hash}
+            href={`${item.route}#${item.hash}`}
+            onClick={(e) => go(e, item)}
             className="group relative font-mono text-[11px] uppercase tracking-widest2 text-ash/70 transition-colors hover:text-amberglow"
           >
-            {l.label}
+            {item.label}
             <span className="absolute -bottom-1 left-0 h-px w-0 bg-amberglow transition-all duration-300 group-hover:w-full" />
           </a>
         ))}
@@ -81,8 +100,8 @@ export default function Navbar() {
 
       <Magnetic strength={0.3}>
         <a
-          href="#ingest"
-          onClick={(e) => scrollTo(e, '#ingest')}
+          href="/studio#ingest"
+          onClick={(e) => go(e, LINKS[0])}
           className="hidden rounded-full border border-white/20 px-5 py-2 font-mono text-[10px] uppercase tracking-widest2 text-bone transition-colors hover:border-amberglow hover:text-amberglow sm:block"
         >
           Deploy Folder

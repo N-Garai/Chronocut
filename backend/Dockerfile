@@ -10,13 +10,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Create swap file to prevent OOM on Render free tier (512MB RAM)
-RUN fallocate -l 1G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=1024 \
-    && chmod 600 /swapfile \
-    && mkswap /swapfile \
-    && swapon /swapfile \
-    && echo '/swapfile none swap sw 0 0' >> /etc/fstab
-
 # Set workdir
 WORKDIR /app
 
@@ -31,6 +24,9 @@ COPY app/ ./app/
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PORT=8000
+# Rich overlays stay on the always-available engine for the free tier; the
+# 512 MB instance cannot pass the 1 GB overlay-engine RAM gate.
+ENV TEXT_OVERLAY_ENGINE=drawtext
 
 EXPOSE 8000
 

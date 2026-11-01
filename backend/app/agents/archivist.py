@@ -16,12 +16,18 @@ class ArchivistAgent:
         self.audio_agent = AudioTranscriberSubAgent()
         self.image_agent = ImageTaggerSubAgent()
 
-    async def process(self, input_files: Dict[str, List[str]]) -> Dict[str, Any]:
+    async def process(self, input_files: Dict[str, List[str]],
+                      job_id: Optional[str] = None) -> Dict[str, Any]:
+        """Transcribe the audio set and tag the photo set in one pass.
+
+        Both workers delegate to the provider layer, so this is the single
+        ingestion path for the ARCHIVIST stage (no vendor SDK calls here).
+        """
         audio_files = input_files.get("audio_files", [])
         photo_files = input_files.get("photo_files", [])
 
-        audio_task = self.audio_agent.transcribe_batch(audio_files)
-        image_task = self.image_agent.tag_batch(photo_files)
+        audio_task = self.audio_agent.transcribe_batch(audio_files, job_id=job_id)
+        image_task = self.image_agent.tag_batch(photo_files, job_id=job_id)
 
         audio_result, image_result = await asyncio.gather(audio_task, image_task)
 

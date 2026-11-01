@@ -1,3 +1,7 @@
+# Render blueprint: exactly ONE web service — the API. The frontend is a
+# separate static site (build `frontend/dist`, publish to any static host)
+# and must NOT be hosted here. All video rendering happens on External
+# workers (repository_dispatch workflows), not on this instance.
 services:
   - type: web
     name: chronocut-api
@@ -5,38 +9,62 @@ services:
     plan: free
     region: oregon
     branch: main
-    dockerfilePath: Dockerfile
-    dockerContext: .
+    dockerfilePath: backend/Dockerfile
+    dockerContext: backend
     envVars:
       - key: ENV
         value: production
+      - key: ENVIRONMENT
+        value: production        # enables the self-ping keep-warm loop
       - key: PORT
-        value: 8000
-      - key: FRONTEND_DIR
-        value: /var/www/html
-      - key: GEMINI_MODEL
-        value: gemini-3.5-flash
-      - key: RENDER_MEMORY_LIMIT_MB
-        value: 512
-      - key: MAX_RENDER_RESOLUTION
-        value: 720
-      - key: GOOGLE_API_KEY
+        value: "8000"
+      # ---- model provider -------------------------------------------------
+      - key: LLM_PROVIDER
+        value: meta
+      - key: MODEL_API_KEY
         sync: false
-      - key: PEXELS_API_KEY
-        sync: false
+      - key: META_BASE_URL
+        value: https://api.meta.ai/v1
+      # ---- security / CORS ------------------------------------------------
+      # The API never serves the frontend; CORS lists the static-site origin.
+      - key: CORS_ORIGINS
+        sync: false              # e.g. https://<static-site>.onrender.com
+      - key: APP_BASE_URL
+        sync: false              # this service's public URL (keep-warm target)
+      - key: KEEP_WARM
+        value: "on"
+      # ---- persistence ------------------------------------------------------
       - key: FIRESTORE_PROJECT_ID
         sync: false
-      - key: GOOGLE_APPLICATION_CREDENTIALS
-        value: /secrets/service_account.json
-      # HyperFrames (N) kinetic-typography overlay engine — baked into the image
-      # via the Dockerfile; these mirror the image ENV so they are visible/overridable.
+      - key: GOOGLE_APPLICATION_CREDENTIALS_JSON
+        sync: false              # inline service-account JSON (Render secret files)
+      # ---- render dispatch (heavy work happens off-instance) ---------------
+      - key: RENDER_DISPATCHER
+        value: actions
+      - key: GH_REPO
+        sync: false
+      - key: GH_DISPATCH_TOKEN
+        sync: false
+      # ---- render output storage -------------------------------------------
+      - key: STORAGE_BACKEND
+        value: supabase
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      # ---- furnace / engine -------------------------------------------------
+      # The 512 MB free instance cannot pass the rich-overlay RAM gate; the
+      # always-available engine stays the default on this image.
       - key: TEXT_OVERLAY_ENGINE
-        value: hyperframes
-      - key: HYPERFRAMES_BIN
-        value: /usr/local/bin/hyperframes
-      - key: HYPERFRAMES_CHROME_ARGS
-        value: "--no-sandbox --disable-dev-shm-usage --single-process"
-      - key: PRODUCER_LOW_MEMORY_MODE
-        value: "1"
+        value: drawtext
+      - key: MAX_RENDER_RESOLUTION
+        value: "720"
+      - key: DEFAULT_OUTPUT_PROFILES
+        value: youtube_landscape
+      # ---- governance ---------------------------------------------------------
+      - key: PER_JOB_COST_CAP_CENTS
+        value: "50"
+      - key: MAX_ACTIVE_JOBS
+        value: "3"
     healthCheckPath: /health
     autoDeploy: true

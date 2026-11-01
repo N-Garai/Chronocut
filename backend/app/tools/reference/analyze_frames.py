@@ -5,12 +5,12 @@ logger = logging.getLogger("chronocut.tools.reference")
 
 
 async def analyze_frames(frames: list[str], job_id: str = None) -> list[str]:
-    """Describe each frame (capped at 8) via Gemini.
+    """Describe each frame (capped at 8) via the configured provider.
 
     Returns a list of one-sentence visual descriptions. Skips unreadable
     frames gracefully.
     """
-    from app.tools.llm.call import scored_gemini_call
+    from app.tools.llm.call import scored_llm_call
 
     descriptions: list[str] = []
     prompt = (
@@ -37,7 +37,7 @@ async def analyze_frames(frames: list[str], job_id: str = None) -> list[str]:
             if not data:
                 continue
 
-            desc = await scored_gemini_call(
+            desc = await scored_llm_call(
                 prompt,
                 media=[{"data": data, "mime_type": "image/jpeg"}],
                 json_mode=False,

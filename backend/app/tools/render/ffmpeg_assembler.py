@@ -430,7 +430,7 @@ def mix_audio(
             if s and os.path.exists(s):
                 _add(s, "volume=0.4,aresample=44100")
 
-        # L1: pad audio to the (already length-correct) video track so the final
+        # Pad audio to the (already length-correct) video track so the final
         # mux can't collapse to the shorter narration length.
         pad_dur = target_duration or total_dur or 5.0
 

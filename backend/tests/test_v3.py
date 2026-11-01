@@ -1,8 +1,4 @@
-"""v3 milestone smoke tests (M7): pure-logic checks that need no network/Gemini.
-
-These guard the no-regression guarantees: duration is honored (L1), director
-overrides are validated against allow-lists (A2), camera-motion recipes build
-(D1), cinematic grades exist (E1), and Pexels queries are specific (C1).
+"""Pure-logic smoke checks for the storyboard/render compo
 """
 import os
 import sys

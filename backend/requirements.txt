@@ -1,9 +1,6 @@
 fastapi>=0.133.0
 uvicorn[standard]>=0.30.0
-google-adk>=2.0.0
-google-genai>=1.0.0,<3.0.0  # M6: range pin (keep the version-agnostic wrapper in call.py working across SDK minors)
 google-cloud-firestore>=2.20.0
-google-generativeai>=0.8.0
 firebase-admin>=6.5.0
 python-dotenv==1.0.1
 pydantic>=2.12.0
@@ -14,9 +11,15 @@ requests>=2.32.4
 pillow==10.4.0
 numpy==1.26.4
 tenacity==9.0.0
-gtts==2.5.4
-edge-tts==7.0.1  # J2: free neural TTS (no key); primary over gTTS
+openai>=1.40.0  # provider SDK for the Meta Model API (OpenAI-compatible endpoint)
+transformers>=4.40.0  # Meta MMS-TTS open weights (local narration)
+torch>=2.0.0
+soundfile>=0.12.0
+scipy>=1.10.0
+psutil>=5.9.0
+opentimelineio>=0.15  # timeline interchange export; import-guarded, degrades to JSON export
+# librosa>=0.11  # optional beat/onset analysis; audio_analysis degrades gracefully without it
 moviepy==1.0.3
-# N (HyperFrames overlay engine): NOT a pip dependency. Requires Node.js 22+ and
-# `npx hyperframes browser ensure` at build time (downloads headless Chrome). Only
-# used when TEXT_OVERLAY_ENGINE=hyperframes; falls back to drawtext otherwise.
+# The HyperFrames overlay engine is NOT a pip dependency: it requires Node.js 22+
+# and `npx hyperframes browser ensure` at build time (downloads headless Chrome).
+# Only used when TEXT_OVERLAY_ENGINE=hyperframes; falls back to drawtext otherwise.

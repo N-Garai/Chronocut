@@ -1,0 +1,27 @@
+name: Keepalive
+
+# Outer cron net for the keep-warm pinger (Layer 2): scheduled Actions drift
+# by tens of minutes, so the in-process self-ping inside the API carries the
+# precise ~14-minute cadence; this workflow only wakes a deployment that fell
+# asleep before its first self-ping (e.g. after a Render restart).
+on:
+  schedule:
+    - cron: "*/14 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health
+        env:
+          KEEPALIVE_URL: ${{ vars.KEEPALIVE_URL }}
+        run: |
+          if [ -z "$KEEPALIVE_URL" ]; then
+            echo "KEEPALIVE_URL repository variable is not set; skipping."
+            exit 0
+          fi
+          curl -fsS --retry 3 --retry-delay 5 -m 30 "$KEEPALIVE_URL/health" \
+            && echo "keepalive ping ok"

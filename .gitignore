@@ -25,14 +25,17 @@ temp/
 Thumbs.db
 secrets/
 *.key
+# Credential-bearing JSON stays untracked; project manifests must not be
+# swallowed by the wildcard, so negation rules come after it.
+*.json
 !frontend/package.json
 !frontend/package-lock.json
-*.json
+!frontend/vercel.json
 service_account.json
 version-roadmap/
 artifact/
 .agent/
 
 # server logs
-chronocut.log
+chronocut.log*
 *.log

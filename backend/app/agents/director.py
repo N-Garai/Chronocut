@@ -1,4 +1,4 @@
-"""DirectorAgent — the LLM "director" (F1/F3/O1/O2).
+"""DirectorAgent — the LLM "director".
 
 Emits an edit-decision list per shot (filter_preset, camera_move, transition,
 text_overlay, sound_bed, voiceover). The deterministic hardcoded mapping in
@@ -49,7 +49,7 @@ class DirectorAgent:
         from app.config import settings
         if not settings.ENABLE_DIRECTOR:
             return None
-        from app.tools.llm.call import scored_gemini_json
+        from app.tools.llm.call import scored_llm_json
         from app.services.firestore_service import JobStateService
 
         skills = _load_skills()
@@ -89,7 +89,7 @@ class DirectorAgent:
             ) + "\n\nProduce the edit-decision plan."
         )
         try:
-            result = await scored_gemini_json(
+            result = await scored_llm_json(
                 prompt, system=system, job_id=job_id, agent="director", tool="director_plan",
                 temperature=0.5, max_output_tokens=4096, require_keys=["plan"],
             )
@@ -100,7 +100,7 @@ class DirectorAgent:
                 if sid is None:
                     continue
                 # Validate every field against allow-lists; drop invalid entries so the
-                # hardcoded mapping stays the fallback (A2 / no-regression).
+                # hardcoded mapping stays the fallback (fully deterministic).
                 clean: Dict[str, Any] = {}
                 if item.get("filter_preset") in ALLOWED_FILTER_PRESETS:
                     clean["filter_preset"] = item["filter_preset"]

@@ -45,7 +45,7 @@ function buildEventLines(events, jobStatus) {
   })
 }
 
-export default function AgentTerminal({ play = false, jobStatus, uploading, uploadError, events = [] }) {
+export default function AgentTerminal({ play = false, jobStatus, uploading, uploadError, events = [], onOpenTimeline = null }) {
   const boxRef = useRef(null)
   const feedRef = useRef(null)
   const [expandedLines, setExpandedLines] = useState({})
@@ -126,7 +126,16 @@ export default function AgentTerminal({ play = false, jobStatus, uploading, uplo
               {jobStatus?.job_id ? `job ${jobStatus.job_id.slice(0, 8)} — ${jobStatus.status || 'PROCESSING'}` : 'chronocut-agent-swarm — tty0'}
             </div>
             <div className="flex items-center gap-3">
-              {isDone && (
+              {isDone && onOpenTimeline && (
+                <button
+                  onClick={onOpenTimeline}
+                  className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-widest2 text-amberglow transition-colors hover:text-amberglow/80"
+                  data-testid="open-timeline"
+                >
+                  <Play size={10} /> Open Timeline
+                </button>
+              )}
+              {isDone && !onOpenTimeline && (
                 <button
                   onClick={() => document.querySelector('#output')?.scrollIntoView({ behavior: 'smooth' })}
                   className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-widest2 text-cyanglow transition-colors hover:text-cyanglow/80"

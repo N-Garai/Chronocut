@@ -10,7 +10,7 @@ def _default_script(theme: str, length_seconds: int, tone: str) -> Dict[str, Any
     n = max(3, length_seconds // 5)
     seg_dur = length_seconds / n
     script = []
-    # C1/K4: even the deterministic fallback emits specific, searchable phrases
+    # Even the deterministic fallback emits specific, searchable phrases
     # and a sound-bed cue so footage search + ambient bed still work without an LLM.
     visual_pool = [
         f"{theme} cinematic wide shot",
@@ -36,7 +36,7 @@ def _default_script(theme: str, length_seconds: int, tone: str) -> Dict[str, Any
 
 async def script_from_transcript(transcript: str, segments: List[Dict[str, Any]], user_prompt: str = "", job_id: Optional[str] = None, similar_context: str = "") -> Dict[str, Any]:
     """Mode A: write a documentary script from a transcribed interview."""
-    from app.tools.llm.call import scored_gemini_json
+    from app.tools.llm.call import scored_llm_json
 
     if not transcript.strip():
         return _default_script(user_prompt or "Untitled story", 60, "reflective")
@@ -70,7 +70,7 @@ async def script_from_transcript(transcript: str, segments: List[Dict[str, Any]]
         "Write the narration script."
     )
     try:
-        result = await scored_gemini_json(prompt, system=system, job_id=job_id, agent="screenwriter",
+        result = await scored_llm_json(prompt, system=system, job_id=job_id, agent="screenwriter",
                                           tool="script_writer", temperature=0.6, max_output_tokens=4096)
         if not result.get("script"):
             raise ValueError("empty script")
@@ -82,7 +82,7 @@ async def script_from_transcript(transcript: str, segments: List[Dict[str, Any]]
 
 async def script_from_prompt(theme: str, tone: str, length_seconds: int, target_audience: str, job_id: Optional[str] = None, seed_words: str = "", similar_context: str = "") -> Dict[str, Any]:
     """Mode C: write a documentary script from a single prompt (no source media)."""
-    from app.tools.llm.call import scored_gemini_json
+    from app.tools.llm.call import scored_llm_json
 
     system = (
         "You are a documentary screenwriter. Write a narration script from a single creative brief. "
@@ -108,7 +108,7 @@ async def script_from_prompt(theme: str, tone: str, length_seconds: int, target_
         f"Structure into ~{max(3, length_seconds // 5)} segments of ~5s each."
     )
     try:
-        result = await scored_gemini_json(prompt, system=system, job_id=job_id, agent="screenwriter",
+        result = await scored_llm_json(prompt, system=system, job_id=job_id, agent="screenwriter",
                                           tool="script_from_prompt", temperature=0.8, max_output_tokens=4096)
         if not result.get("script"):
             raise ValueError("empty script")
@@ -120,7 +120,7 @@ async def script_from_prompt(theme: str, tone: str, length_seconds: int, target_
 
 async def script_from_reference(reference_brief: Dict[str, Any], topic: str, length_seconds: int, target_audience: str, job_id: Optional[str] = None, similar_context: str = "") -> Dict[str, Any]:
     """Mode B: write a script that matches the pacing/structure of a reference cut."""
-    from app.tools.llm.call import scored_gemini_json
+    from app.tools.llm.call import scored_llm_json
 
     rb = reference_brief or {}
     system = (
@@ -150,7 +150,7 @@ async def script_from_reference(reference_brief: Dict[str, Any], topic: str, len
         "Write a script matching that structure on the new topic."
     )
     try:
-        result = await scored_gemini_json(prompt, system=system, job_id=job_id, agent="screenwriter",
+        result = await scored_llm_json(prompt, system=system, job_id=job_id, agent="screenwriter",
                                           tool="script_from_reference", temperature=0.7, max_output_tokens=4096)
         if not result.get("script"):
             raise ValueError("empty script")

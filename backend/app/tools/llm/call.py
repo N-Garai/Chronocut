@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import time
-import json
 import re
 from typing import Optional, List, Dict, Any
 
@@ -11,35 +10,26 @@ from app.tools.llm.cache import LLMCache
 from app.tools.llm.governor import check_budget, record_call, estimate_cost_cents, BudgetExceededError
 from app.utils.rate_limiter import get_rate_limiter
 
-try:
-    from google.api_core.exceptions import ResourceExhausted
-    HAS_GOOGLE_EXCEPTIONS = True
-except ImportError:
-    HAS_GOOGLE_EXCEPTIONS = False
-
 logger = logging.getLogger("chronocut.tools.llm.call")
 
 _client = None
 
-# B3: global concurrency semaphore so concurrent BackgroundTasks don't burst the
-# free-tier Gemini RPM budget.
-_gemini_semaphore: Optional[asyncio.Semaphore] = None
+# Global concurrency semaphore so concurrent BackgroundTasks don't burst the
+# provider rate budget.
+_gen_semaphore: Optional[asyncio.Semaphore] = None
 
 
 def _get_semaphore() -> asyncio.Semaphore:
-    global _gemini_semaphore
-    if _gemini_semaphore is None:
-        _gemini_semaphore = asyncio.Semaphore(4)
-    return _gemini_semaphore
+    global _gen_semaphore
+    if _gen_semaphore is None:
+        _gen_semaphore = asyncio.Semaphore(4)
+    return _gen_semaphore
 
 
 def _is_quota_error(e: Exception) -> bool:
-    """Version-agnostic 429 / quota detection (the exact class differs across
-    google-genai SDK versions)."""
+    """Version-agnostic 429 / quota detection."""
     if e is None:
         return False
-    if HAS_GOOGLE_EXCEPTIONS and isinstance(e, ResourceExhausted):
-        return True
     msg = " ".join(str(e).lower().split())
     return ("429" in msg or "resource_exhausted" in msg
             or "quota" in msg or "rate" in msg and "exceeded" in msg
@@ -50,14 +40,12 @@ def _parse_retry_delay(e: Exception) -> Optional[float]:
     """Best-effort extraction of a Retry-After / RetryInfo delay (seconds)."""
     import re as _re
     msg = str(e)
-    # google.genai often embeds "retry_delay { seconds: N }" or seconds=N
     m = _re.search(r"seconds\s*[:=]\s*(\d+)", msg)
     if m:
         try:
             return float(m.group(1))
         except ValueError:
             return None
-    # HTTP Retry-After header style
     m = _re.search(r"retry[-_]?after[=:\s]+(\d+)", msg, _re.IGNORECASE)
     if m:
         try:
@@ -69,28 +57,13 @@ def _parse_retry_delay(e: Exception) -> Optional[float]:
 
 def _sanity_check_json(obj: Dict[str, Any], *, require_keys: Optional[List[str]] = None) -> None:
     """Raise ValueError if the parsed JSON lacks obvious structure. Used to force
-    a retry instead of caching an invalid blob (A4)."""
+    a retry instead of caching an invalid blob."""
     if not isinstance(obj, dict):
         raise ValueError("LLM returned non-object JSON")
     if require_keys:
         missing = [k for k in require_keys if k not in obj]
         if missing:
             raise ValueError(f"LLM JSON missing keys: {missing}")
-
-
-def _get_client():
-    global _client
-    if _client is None:
-        try:
-            from google import genai
-            from google.genai import types  # noqa: F401
-        except ImportError as e:
-            raise RuntimeError("google-genai is required (provided by google-adk).") from e
-        api_key = settings.GOOGLE_API_KEY
-        if not api_key:
-            raise RuntimeError("GOOGLE_API_KEY is not configured.")
-        _client = genai.Client(api_key=api_key)
-    return _client
 
 
 def _media_hash(media: Optional[List[Dict[str, Any]]]) -> List[str]:
@@ -101,50 +74,8 @@ def _media_hash(media: Optional[List[Dict[str, Any]]]) -> List[str]:
     return out
 
 
-def _build_contents(prompt: str, media: Optional[List[Dict[str, Any]]]):
-    from google.genai import types
-    parts = []
-    for m in (media or []):
-        parts.append(types.Part.from_bytes(data=m["data"], mime_type=m["mime_type"]))
-    parts.append(types.Part.from_text(text=prompt))
-    return parts
-
-
-def _extract_text(response) -> str:
-    try:
-        if getattr(response, "text", None):
-            return response.text
-        if response.candidates and response.candidates[0].content.parts:
-            return "".join(p.text or "" for p in response.candidates[0].content.parts)
-    except Exception:
-        pass
-    return ""
-
-
-async def _generate_content(client, model, contents, config):
-    """Version-agnostic Gemini generation.
-
-    ``google-genai`` < 2.x exposes ``generate_content_async``; >= 2.x removed
-    it and made ``generate_content`` a blocking call. Support both runtimes so a
-    single code path works on every deployed SDK version.
-    """
-    models = client.models
-    if hasattr(models, "generate_content_async"):
-        coro = models.generate_content_async(model=model, contents=contents, config=config)
-        # B3: bound every real Gemini call with a per-call timeout.
-        return await asyncio.wait_for(coro, timeout=settings.GEMINI_CALL_TIMEOUT)
-    loop = asyncio.get_event_loop()
-    # Sync path: wait_for cannot cancel the executor work, but it bounds our wait.
-    return await asyncio.wait_for(
-        loop.run_in_executor(
-            None, lambda: models.generate_content(model=model, contents=contents, config=config)
-        ),
-        timeout=settings.GEMINI_CALL_TIMEOUT,
-    )
-
-
-# B4: in-flight dedupe. Concurrent identical prompts (same cache_key) share one
-# in-flight request instead of bursting the RPM budget. Keyed by LLMCache key.
+# In-flight dedupe. Concurrent identical prompts (same cache_key) share one
+# in-flight request instead of bursting the rate budget. Keyed by LLMCache key.
 _in_flight: Dict[str, "asyncio.Future"] = {}
 
 
@@ -169,23 +100,81 @@ async def _coalesce(cache_key: str, coro_fn):
             _in_flight.pop(cache_key, None)
 
 
-async def scored_gemini_call(
+async def _meta_network_call(
+    prompt: str,
+    system: Optional[str],
+    *,
+    agent: str,
+    tool: str,
+    temperature: float,
+    max_output_tokens: int,
+    media: Optional[List[Dict[str, Any]]],
+    json_mode: bool,
+) -> str:
+    """Meta network path (structured output on json_mode; retries inside provider)."""
+    from app.tools.llm.provider import MetaProvider  # lightweight import guard
+
+    provider = MetaProvider()
+    schema = {"name": "chronocut_response", "schema": {"type": "object"}} if json_mode else None
+    sem = _get_semaphore()
+    limiter = get_rate_limiter()
+    est_tokens = max(200, len(prompt) // 3 + max_output_tokens)
+    await limiter.acquire(est_tokens)
+
+    async def _run():
+        async with sem:
+            return await provider.generate(
+                prompt=prompt,
+                system=system,
+                schema=schema,
+                media=media,
+                temperature=temperature,
+                max_tokens=max_output_tokens,
+            )
+
+    text = await _run()
+    if not text:
+        raise RuntimeError("Meta call returned empty completion")
+    return text
+
+
+def _provider_ready(provider_name: str) -> bool:
+    """True when the configured provider currently has credentials to call."""
+    return bool((settings.provider_api_key or "").strip())
+
+
+async def scored_llm_call(
     prompt: str,
     system: Optional[str] = None,
     *,
     job_id: Optional[str] = None,
     agent: str = "orchestrator",
-    tool: str = "gemini",
+    tool: str = "llm",
     temperature: float = 0.7,
     max_output_tokens: int = 2048,
     media: Optional[List[Dict[str, Any]]] = None,
     json_mode: bool = False,
     use_cache: bool = True,
+    provider: Optional[str] = None,
 ) -> str:
-    """Single, governed, cached Gemini entrypoint used by every agent."""
-    model = settings.GEMINI_MODEL
+    """Single, governed, cached provider entrypoint used by every agent.
+
+    Routes to the configured provider (Meta Model API by default; a local
+    OpenAI-compatible endpoint behind ``LLM_PROVIDER=local``). Keeps the
+    existing cache, budget guard, in-flight coalescing, and cost ledger
+    behavior identical across providers.
+    """
+    provider_name = (provider or settings.LLM_PROVIDER or "meta").strip().lower()
+    model = settings.META_TEXT_MODEL
+    # Resilience: when the configured provider has no credentials, never
+    # silently fall back to another model — degrade to deterministic templates
+    # instead (the planner/director already handle that path).
+    if not _provider_ready(provider_name):
+        raise RuntimeError(
+            f"LLM provider '{provider_name}' is not configured; deterministic fallback engaged"
+        )
     media_hashes = _media_hash(media)
-    cache_key = LLMCache.key(system or "", prompt, temperature, model, media_hashes)
+    cache_key = LLMCache.key(f"{provider_name}:{system or ''}", prompt, temperature, model, media_hashes)
 
     if use_cache:
         cached = LLMCache.get(cache_key)
@@ -196,84 +185,39 @@ async def scored_gemini_call(
             logger.info(f"LLM cache HIT for {agent}/{tool}")
             return cached
 
-    # Provider scoring (free-tier: Flash only).
+    # Provider scoring (lightweight classification only).
     _ = score_provider(agent, len(prompt) // 4)
 
-    # Estimate + budget guard (assume small call).
+    # Estimate + budget guard.
     est_tokens = max(200, len(prompt) // 3 + max_output_tokens)
+    est_cost = _meta_estimated_cost(est_tokens, max_output_tokens)
     try:
-        check_budget(job_id, estimate_cost_cents(est_tokens, max_output_tokens))
+        check_budget(job_id, est_cost)
     except BudgetExceededError:
         raise
 
-    client = _get_client()
     t0 = time.time()
-    models_to_try = [model] + settings.gemini_fallback_models
-    max_retries = max(1, settings.GEMINI_MAX_RETRIES)
-    limiter = get_rate_limiter()
-    sem = _get_semaphore()
-
-    async def _do_generate() -> str:
-        # Resilience: the configured GEMINI_MODEL may be unavailable/invalid
-        # (e.g. a typo like "gemini-3.5-flash"). Try it, then configured fallbacks,
-        # so a bad model name never silently degrades every agent to its template.
-        last_err = None
-        for attempt in range(max_retries):
-            for attempt_model in models_to_try:
-                try:
-                    # B1: throttle every real Gemini call to the RPM budget.
-                    await limiter.acquire(est_tokens)
-                    from google.genai import types
-                    config = types.GenerateContentConfig(
-                        temperature=temperature,
-                        max_output_tokens=max_output_tokens,
-                    )
-                    if system:
-                        config.system_instruction = system
-                    if json_mode:
-                        config.response_mime_type = "application/json"
-
-                    async with sem:
-                        response = await _generate_content(
-                            client, attempt_model, _build_contents(prompt, media), config
-                        )
-                    text = _extract_text(response)
-                    if text:
-                        return text
-                except Exception as e:  # noqa: BLE001
-                    last_err = e
-                    if _is_quota_error(e):
-                        # B2: 429-aware exponential backoff, honor Retry-After.
-                        delay = _parse_retry_delay(e) or (2 ** attempt * 5)
-                        logger.warning(
-                            f"Gemini quota/429 ({agent}/{tool}, model={attempt_model}); "
-                            f"backing off {delay:.1f}s"
-                        )
-                        await asyncio.sleep(min(delay, 60))
-                        continue
-                    logger.warning(f"Gemini model '{attempt_model}' failed ({agent}/{tool}): {e}")
-            # All models failed this attempt; back off before the next bounded retry.
-            if attempt < max_retries - 1:
-                await asyncio.sleep(min(2 ** attempt * 3, 30))
-        if last_err is not None:
-            raise last_err
-        raise RuntimeError("Gemini call failed with no models available")
-
-    # B4: concurrent identical prompts coalesce into a single in-flight request.
+    coro_fn = _meta_network_call
     try:
-        text = await _coalesce(cache_key, _do_generate)
+        text = await _coalesce(
+            cache_key,
+            lambda: coro_fn(
+                prompt, system,
+                agent=agent, tool=tool, temperature=temperature,
+                max_output_tokens=max_output_tokens, media=media, json_mode=json_mode,
+            ),
+        )
     except Exception as e:
-        logger.error(f"Gemini call failed ({agent}/{tool}): {e}")
+        logger.error(f"provider call failed ({agent}/{tool}, provider={provider_name}): {e}")
         cached = LLMCache.get(cache_key)
         if cached is not None:
             return cached
         raise
 
     duration_ms = int((time.time() - t0) * 1000)
-    # Rough token accounting.
     prompt_tokens = len(prompt) // 4 + sum(len(m["data"]) // 1000 for m in (media or []))
     completion_tokens = len(text) // 4
-    cost_cents = estimate_cost_cents(prompt_tokens, completion_tokens)
+    cost_cents = _meta_estimated_cost(prompt_tokens, completion_tokens)
     record_call(job_id, agent=agent, tool=tool, model=model,
                 prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                 cost_cents=cost_cents, cached=False, duration_ms=duration_ms)
@@ -282,31 +226,44 @@ async def scored_gemini_call(
     return text
 
 
-async def scored_gemini_json(
+def _meta_estimated_cost(prompt_tokens: int, completion_tokens: int) -> float:
+    """Muse Spark pricing: $1.25 / 1M input, $4.25 / 1M output (to cents)."""
+    in_cents = (prompt_tokens / 1_000_000.0) * 1.25 * 100.0
+    out_cents = (completion_tokens / 1_000_000.0) * 4.25 * 100.0
+    return round(in_cents + out_cents, 4)
+
+
+async def scored_llm_json(
     prompt: str,
     system: Optional[str] = None,
     *,
     job_id: Optional[str] = None,
     agent: str = "orchestrator",
-    tool: str = "gemini",
+    tool: str = "llm",
     temperature: float = 0.7,
     max_output_tokens: int = 2048,
     media: Optional[List[Dict[str, Any]]] = None,
     use_cache: bool = True,
     require_keys: Optional[List[str]] = None,
+    provider: Optional[str] = None,
 ) -> Dict[str, Any]:
-    raw = await scored_gemini_call(
+    raw = await scored_llm_call(
         prompt, system, job_id=job_id, agent=agent, tool=tool,
         temperature=temperature, max_output_tokens=max_output_tokens,
-        media=media, json_mode=True, use_cache=use_cache,
+        media=media, json_mode=True, use_cache=use_cache, provider=provider,
     )
-    # A4: raise on invalid JSON so the caller (which already has a fallback
+    # Raise on invalid JSON so the caller (which already has a fallback
     # template) retries / degrades instead of caching a broken blob.
     obj = _parse_json(raw)
     if "raw" in obj:
         raise ValueError("LLM returned non-JSON content")
     _sanity_check_json(obj, require_keys=require_keys)
     return obj
+
+
+async def scored_provider_json(provider: str, *args, **kwargs) -> Dict[str, Any]:
+    """Explicit-provider JSON call (named alias for clarity at call sites)."""
+    return await scored_llm_json(*args, provider=provider, **kwargs)
 
 
 def _parse_json(raw: str) -> Dict[str, Any]:
@@ -330,15 +287,44 @@ def _parse_json(raw: str) -> Dict[str, Any]:
 
 
 async def validate_model() -> Dict[str, Any]:
-    """Startup health check: fail fast if the model is unavailable."""
-    try:
-        client = _get_client()
-        from google.genai import types
-        resp = await _generate_content(
-            client, settings.GEMINI_MODEL,
-            [types.Part.from_text(text="ping")],
-            types.GenerateContentConfig(max_output_tokens=8),
-        )
-        return {"ok": True, "model": settings.GEMINI_MODEL, "reply": (resp.text or "").strip()[:20]}
-    except Exception as e:
-        return {"ok": False, "model": settings.GEMINI_MODEL, "error": str(e)}
+    """Startup health check: fail fast if the configured provider is unavailable."""
+    provider_name = (settings.LLM_PROVIDER or "meta").strip().lower()
+    if provider_name == "meta":
+        if not settings.provider_api_key:
+            return {"ok": True, "provider": "meta", "model": settings.META_TEXT_MODEL,
+                    "note": "no key configured; deterministic fallbacks will be used"}
+        try:
+            from app.tools.llm.provider import MetaProvider
+            import asyncio as _asyncio
+            provider = MetaProvider()
+            text = await _asyncio.to_thread(
+                lambda: provider._client.chat.completions.create(
+                    model=provider.default_model,
+                    messages=[{"role": "user", "content": "ping"}],
+                    max_tokens=8, temperature=0.0,
+                )
+            )
+            return {"ok": True, "provider": "meta",
+                    "model": provider.default_model,
+                    "reply": ((text.choices[0].message.content or "") or "").strip()[:20]}
+        except Exception as e:
+            return {"ok": False, "provider": "meta", "model": settings.META_TEXT_MODEL, "error": str(e)}
+    if provider_name == "local":
+        try:
+            from app.tools.llm.provider import LocalOpenWeightProvider
+            import asyncio as _asyncio
+            provider = LocalOpenWeightProvider()
+            text = await _asyncio.to_thread(
+                lambda: provider._client.chat.completions.create(
+                    model=provider.default_model,
+                    messages=[{"role": "user", "content": "ping"}],
+                    max_tokens=8, temperature=0.0,
+                )
+            )
+            return {"ok": True, "provider": "local",
+                    "model": provider.default_model,
+                    "reply": ((text.choices[0].message.content or "") or "").strip()[:20]}
+        except Exception as e:
+            return {"ok": False, "provider": "local", "model": settings.LOCAL_LLM_MODEL, "error": str(e)}
+    return {"ok": False, "provider": provider_name, "model": settings.META_TEXT_MODEL,
+            "error": "unknown provider"}

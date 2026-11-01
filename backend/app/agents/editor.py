@@ -124,7 +124,7 @@ class EditorAgent:
 
         if llm_available:
             try:
-                from app.tools.llm.call import scored_gemini_call
+                from app.tools.llm.call import scored_llm_call
                 brief_txt = ""
                 if reference_brief:
                     brief_txt = json.dumps(reference_brief, ensure_ascii=False)[:600]
@@ -140,7 +140,7 @@ class EditorAgent:
                     f"{self._summarize_storyboard(storyboard)}\n\n"
                     "Refine this edit. Drop only clearly weak/off-brief shots. Respond with JSON."
                 )
-                result = await scored_gemini_call(
+                result = await scored_llm_call(
                     prompt, system=self.SYSTEM_PROMPT, json_mode=True
                 )
                 raw = result.get("text") if isinstance(result, dict) else str(result)

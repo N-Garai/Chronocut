@@ -1,8 +1,22 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import gsap from 'gsap'
-import { loaderEvents } from '../data/agentLogs'
+
+// Boot log shown inside the loader splash (was data/agentLogs.js — the
+// dead `terminalFeed` mock was removed; these 9 boot lines remain).
 
 const CLAPPER_SVG = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect x="10" y="10" width="180" height="180" rx="12" fill="none" stroke="%23FFC300" stroke-width="6"/><rect x="10" y="10" width="180" height="60" rx="12" fill="%23050505"/><rect x="10" y="40" width="180" height="30" fill="%23FFC300"/><line x1="20" y1="25" x2="180" y2="25" stroke="%23050505" stroke-width="3"/><line x1="20" y1="35" x2="180" y2="35" stroke="%23050505" stroke-width="3"/><line x1="20" y1="45" x2="180" y2="45" stroke="%23050505" stroke-width="3"/><text x="100" y="85" text-anchor="middle" fill="%23FFC300" font-family="monospace" font-size="14" font-weight="bold">ACTION</text><text x="100" y="105" text-anchor="middle" fill="%23CFCFCF" font-family="monospace" font-size="10">CHRONOCUT</text><circle cx="100" cy="140" r="30" fill="none" stroke="%23FFC300" stroke-width="4"/><polygon points="92,130 92,150 112,140" fill="%23FFC300"/></svg>`)}`
+
+const LOADER_EVENTS = [
+  'BOOT AGENT RUNTIME',
+  'ALLOC SANDBOX :: 512MB',
+  'MOUNT STATE BANK :: JOB_0001',
+  'ROUTING SEQUENTIAL [archivist -> scripting]',
+  'SPAWN worker : audio_parse@0.3',
+  'SPAWN worker : vision_tag@0.3',
+  'GRID LOCK :: deterministic edges enforced',
+  'CALIBRATE MODEL :: temp 0.2',
+  'EQUILIBRIUM :: ready to ingest',
+]
 
 export default function Loader({ onComplete }) {
   const overlayRef = useRef(null)
@@ -171,7 +185,7 @@ export default function Loader({ onComplete }) {
           </div>
 
           <div ref={eventsRef} className="loader-events mt-6 flex h-28 max-w-sm flex-col justify-center overflow-hidden font-mono text-[10px] leading-5 text-ash/80 sm:max-w-md">
-            {loaderEvents.slice(0, 7).map((ev) => (
+            {LOADER_EVENTS.slice(0, 7).map((ev) => (
               <div key={ev} className="loader-event translate-y-3 opacity-0">
                 <span className="text-cyanglow">› </span>
                 {ev}

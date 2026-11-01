@@ -25,7 +25,7 @@ def _emit(job_id: str, stage: str, progress: int, message: str, **extra):
 
 
 def _cancelled(job_id: str) -> bool:
-    """A5: cooperative cancellation — long stages poll this between units of work."""
+    """Cooperative cancellation — long stages poll this between units of work."""
     try:
         j = JobStateService.get_job(job_id) or {}
         return j.get("status") == "CANCELLED"
@@ -34,7 +34,7 @@ def _cancelled(job_id: str) -> bool:
 
 
 def _check_memory() -> Dict[str, Any]:
-    """R2: free-tier memory guard. Returns memory info for logging/decisions."""
+    """Free-tier memory guard. Returns memory info for logging/decisions."""
     try:
         import psutil  # type: ignore
         vm = psutil.virtual_memory()
@@ -58,7 +58,7 @@ class LeadOrchestratorAgent:
         except Exception as e:
             logger.warning(f"maintenance step skipped: {e}")
 
-        # R1: stage-level resumability. If the job already has output from a
+        # Stage-level resumability. If the job already has output from a
         # completed stage, skip that stage instead of re-running it. This makes
         # the pipeline crash-safe: a Render restart, OOM kill, or deploy can
         # resume from the last completed stage rather than starting over.
@@ -80,29 +80,42 @@ class LeadOrchestratorAgent:
         audio_files = input_files.get("audio_files", []) or []
         video_files = input_files.get("video_files", []) or []
         user_prompt = input_files.get("user_prompt", "") or ""
+        # Any uploaded file that is not audio/photo/video is a document: its text
+        # becomes part of the brief, so a script/notes file can drive the cut.
+        document_files = input_files.get("document_files", []) or []
+        if document_files:
+            try:
+                from app.tools.media.documents import merge_prompt_with_documents
+                merged = merge_prompt_with_documents(user_prompt, document_files)
+                user_prompt = merged["prompt"]
+                _emit(job_id, "ingest", 4,
+                      f"Read {merged['count']} document(s) "
+                      f"({merged['chars']} chars): "
+                      f"{', '.join(d['name'] for d in merged['documents'][:4])}.")
+            except Exception as de:
+                logger.warning("document ingestion skipped: %s", de)
         reference_url = input_files.get("reference_url")
         target_language = input_files.get("target_language") or "en"
         profiles = input_files.get("output_profiles") or settings.output_profiles
         requested_length = int(input_files.get("length_seconds") or 60)
 
-        # A1: probe LLM availability. Every Gemini call already retries with
+        # Probe LLM availability. Every provider call already retries with
         # backoff and fails over to deterministic templates, so a single transient
-        # 503 at startup must NOT disable LLM for the whole job (that just made
-        # the entire run fall back to hardcoded templates). Treat the API key as
-        # the source of truth; only go fully zero-LLM when no key is configured.
-        llm_available = bool(settings.GOOGLE_API_KEY)
+        # 503 at startup must NOT disable LLM for the whole job. Treat the API key
+        # as the source of truth; only go fully zero-LLM when no key is configured.
+        llm_available = bool(settings.provider_api_key)
         try:
             from app.tools.llm.call import validate_model
             vm = await validate_model()
             logger.info(f"validate_model at ingest: {vm}")
-            if vm.get("ok") is False and not settings.GOOGLE_API_KEY:
+            if vm.get("ok") is False and not settings.provider_api_key:
                 llm_available = False
         except Exception as e:
             logger.warning(f"validate_model probe failed: {e}")
         _emit(job_id, "ingest", 5, f"Job started in '{mode}' mode. LLM available: {llm_available}.")
         JobStateService.update_job(job_id, {"status": "PROCESSING"})
 
-        # M2: capability discovery (informational; no model calls).
+        # Capability discovery (informational; no model calls).
         try:
             from app.agents.sub_agents.capability_discovery import CapabilityDiscoveryAgent
             caps = await CapabilityDiscoveryAgent().run()
@@ -112,7 +125,7 @@ class LeadOrchestratorAgent:
 
         filler: Dict[str, Any] = {"filler_count": 0, "filler_words": [], "segments": []}
 
-        # ---- M5: Reference video (optional) --------------------------------
+        # ---- Reference video (optional) -------------------------------------
         reference_brief = None
         if mode == "from_reference" and reference_url:
             _emit(job_id, "reference", 10, "Analyzing reference video…")
@@ -132,11 +145,20 @@ class LeadOrchestratorAgent:
         if mode in ("from_media", "from_reference"):
             _emit(job_id, "archivist", 20, "Transcribing audio, analyzing videos and tagging photos…")
             try:
-                if audio_files:
-                    from app.tools.audio import gemini_audio_transcribe
-                    res = await gemini_audio_transcribe(audio_files[0], job_id=job_id)
-                    transcript = res.get("full_text", "")
-                    segments = res.get("segments", [])
+                if audio_files or photo_files:
+                    # One ingestion path: the ARCHIVIST sub-agents transcribe and
+                    # tag through the provider layer (Meta first, local fallback).
+                    from app.agents.archivist import ArchivistAgent
+                    archivist_out = await ArchivistAgent().process(
+                        {"audio_files": audio_files, "photo_files": photo_files},
+                        job_id=job_id)
+                    transcript = archivist_out.get("transcript", "")
+                    segments = archivist_out.get("segments", [])
+                    image_tags.update(archivist_out.get("image_tags", {}) or {})
+                    _emit(job_id, "archivist", 30,
+                          f"Transcribed {len(audio_files)} audio file(s), tagged "
+                          f"{len(image_tags)} photo(s).",
+                          sub_agent="ArchivistAgent")
                 if video_files:
                     from app.tools.media import ingest_video_file
                     for vf in video_files:
@@ -147,11 +169,6 @@ class LeadOrchestratorAgent:
                                 transcript = (transcript + "\n" + vc["transcript"]).strip()
                         except Exception as ve:
                             logger.warning(f"video ingest skipped for {vf}: {ve}")
-                if photo_files:
-                    from app.tools.vision import gemini_image_tag_v2
-                    for fp in photo_files:
-                        tag = await gemini_image_tag_v2(fp, job_id=job_id)
-                        image_tags[fp] = tag
                 _emit(job_id, "archivist", 35, f"Processed {len(audio_files)} audio, {len(video_clips)} videos, {len(photo_files)} photos.")
                 try:
                     from app.agents.sub_agents.filler_analyzer import FillerAnalyzerAgent
@@ -163,7 +180,7 @@ class LeadOrchestratorAgent:
                 logger.error(f"Archivist failed: {e}")
                 _emit(job_id, "archivist", 35, f"Archivist partial failure: {e}")
 
-        # ---- M9: RAG recall -------------------------------------------------
+        # ---- RAG recall -------------------------------------------------------
         rag_context = ""
         if settings.ENABLE_RAG:
             try:
@@ -178,7 +195,18 @@ class LeadOrchestratorAgent:
             vparts = [f"Uploaded video {i+1} ({vc.get('duration')}s): {vc.get('visual_description','')}. Transcript: {vc.get('transcript','')[:400]}" for i, vc in enumerate(video_clips)]
             rag_context = (rag_context + "\n" + "\n".join(vparts)).strip()
 
-        # V: when no explicit length is requested, size the video to the uploaded
+        # ARCHIVIST specialist consumes the transcript/tags this stage produced
+        # (no extra model call) and hands its turn map to later stages.
+        try:
+            from app.agents.subagents import record_pipeline_stage as _stage
+            _stage(job_id, "archivist", "excerpter", keyword="light",
+                   data={"turns": len(segments or []), "photos": len(image_tags or {}),
+                         "videos": len(video_clips), "fillers": (filler or {}).get("filler_count", 0)},
+                   note=f"cleaned {len(segments or [])} turn(s), {len(image_tags or {})} asset(s)")
+        except Exception as _se:
+            logger.warning("archivist specialist context skipped: %s", _se)
+
+        # When no explicit length is requested, size the video to the uploaded
         # media so an uploaded clip isn't stretched/compressed to a default length.
         if not input_files.get("length_seconds"):
             media_len = sum(float(vc.get("duration") or 0) for vc in video_clips) + len(photo_files) * 5
@@ -221,7 +249,7 @@ class LeadOrchestratorAgent:
                 script_segments = script_out.get("script", [])
                 _emit(job_id, "screenwriter", 52, f"Script written: {len(script_segments)} segments.")
 
-                # V: derive clean, distinct B-roll search keywords from the prompt so
+                # Derive clean, distinct B-roll search keywords from the prompt so
                 # footage search uses real subjects (e.g. 'city lights night') instead
                 # of the raw prompt sentence. Graceful: empty list -> shot_composer
                 # falls back to cleaned per-segment visuals.
@@ -249,13 +277,24 @@ class LeadOrchestratorAgent:
             script_segments = script_out.get("script", [])
             _emit(job_id, "screenwriter", 52, f"Script recovered from cache ({len(script_segments)} segments).")
 
-        # ---- Director: compose storyboard (M6/M8 fallback chain) ----------
+        # SCREENWRITER specialist reads the beats/arc artifact, no extra call.
+        try:
+            from app.agents.subagents import record_pipeline_stage as _stage
+            _stage(job_id, "screenwriter", "narrativist", keyword="auto",
+                   data={"segments": len(script_segments or []),
+                         "length_s": requested_length,
+                         "mode": str(input_files.get("mode") or "from_media")},
+                   note=f"{len(script_segments or [])} beat(s) handed to the director")
+        except Exception as _se:
+            logger.warning("screenwriter specialist context skipped: %s", _se)
+
+        # ---- Director: compose storyboard (LLM plan over deterministic fallback) --
         director_plan = None
         if "director" not in completed_stages:
             _emit(job_id, "director", 58, "Composing the visual storyboard…")
             _emit(job_id, "director", 60, "Composing shot list via StoryboardComposerAgent…", sub_agent="StoryboardComposerAgent")
 
-            # F2: LLM director emits an edit-decision list; shot_composer applies it
+            # LLM director emits an edit-decision list; shot_composer applies it
             # over the hardcoded mapping (which stays the guaranteed fallback). If the
             # director is disabled or LLM is unavailable, director_plan is None and the
             # deterministic mapping is used unchanged (no regression).
@@ -298,6 +337,20 @@ class LeadOrchestratorAgent:
             storyboard = (existing_job.get("director_output", {}) or {}).get("storyboard", [])
             _emit(job_id, "director", 66, f"Storyboard recovered from cache ({len(storyboard)} shots).")
 
+        # DIRECTOR specialist: b-roll/coverage decisions over the shot list it
+        # just composed (deterministic read, no extra model call).
+        try:
+            from app.agents.subagents import record_pipeline_stage as _stage
+            _broll = sum(1 for s in (storyboard or [])
+                         if str(s.get("visual_source") or s.get("type") or "").lower()
+                         in ("footage", "broll", "b_roll", "generated"))
+            _stage(job_id, "director", "scene_caster", keyword="auto",
+                   data={"shots": len(storyboard or []), "broll": _broll,
+                         "profile": profiles[0]},
+                   note=f"{len(storyboard or [])} shot(s), {_broll} b-roll insert(s)")
+        except Exception as _se:
+            logger.warning("director specialist context skipped: %s", _se)
+
         # ---- Editor supervisor: pro edit pass (LLM decisions + fallback) ----
         # Runs AFTER the director/storyboard so it can refine the composed shots.
         # It only mutates the storyboard (drop weak shots, regrade, re-transition);
@@ -323,12 +376,12 @@ class LeadOrchestratorAgent:
                 except Exception as ee:
                     logger.warning(f"editor supervisor skipped: {ee}")
 
-            # ---- Editor: narration TTS + multi-profile render (M8) ------------
+            # ---- Editor: narration TTS + multi-profile render ------------------
             _emit(job_id, "editor", 70, "Synthesizing narration and rendering video…")
             narration_dir = os.path.join(tempfile_dir(), f"chronocut_narr_{job_id}")
             os.makedirs(narration_dir, exist_ok=True)
 
-            # R2: log memory state before the heaviest stage so OOMs are diagnosable.
+            # Log memory state before the heaviest stage so OOMs are diagnosable.
             mem_before = _check_memory()
             logger.info(f"job {job_id}: memory before render: {mem_before}")
             if mem_before.get("available_mb", -1) > 0 and mem_before["available_mb"] < 300:
@@ -351,8 +404,8 @@ class LeadOrchestratorAgent:
                 except Exception:
                     pass
 
-            # R1: skip TTS for shots that already have narration files (resumability).
-            # Generate narration audio per shot (A5: cooperative cancellation)
+            # Skip TTS for shots that already have narration files (resumability).
+            # Generate narration audio per shot (cooperative cancellation)
             try:
                 from app.tools.audio import synthesize_speech
                 mem_before_tts = _check_memory()
@@ -391,6 +444,45 @@ class LeadOrchestratorAgent:
             else:
                 try:
                     from app.tools.render import render_job
+                    # ---- EDL bridge (single source of truth) ----
+                    # Compose the storyboard into a versioned EDL revision and save it
+                    # BEFORE rendering, so the timeline UI edits the same artifact the
+                    # render compiler consumes. Deterministic builder; validation via
+                    # save_edl. If the builder fails we fall back to the legacy
+                    # storyboard direct path (no regression).
+                    try:
+                        from app.edl.store import save_edl
+                        from app.edl.from_storyboard import build_edl_from_storyboard
+                        proposed = build_edl_from_storyboard(
+                            storyboard,
+                            job_id=job_id,
+                            profile=profiles[0],
+                            narration_dir=narration_dir,
+                            background_music=input_files.get("background_music") or None,
+                            title=user_prompt or "",
+                            created_by="pipeline",
+                        )
+                        _stored_edl, _edl_rev = save_edl(job_id, proposed, source="pipeline")
+                        _emit(job_id, "editor", 88,
+                              f"EDL revision {_edl_rev} generated from storyboard.",
+                              sub_agent="EDLBuilder")
+
+                        # RENDER/framer: subject focus per visual source, computed
+                        # once here so every profile export reframes for free.
+                        try:
+                            from app.tools.media.reframe import reframe_sources
+                            from app.agents.subagents import record_pipeline_stage as _stage
+                            _focus = reframe_sources(_stored_edl.get("sources") or [], job_id)
+                            _stage(job_id, "render", "framer", keyword="auto",
+                                   data={"focus": _focus, "profile": profiles[0],
+                                         "sources": len(_stored_edl.get("sources") or [])},
+                                   note=f"framing {len(_focus)} subject-aware source(s) for "
+                                        f"{len(profiles)} profile(s)")
+                        except Exception as frame_err:
+                            logger.warning("framing stage skipped: %s", frame_err)
+                    except Exception as edl_err:
+                        logger.warning(f"EDL bridge skipped: {edl_err}")
+
                     video_paths = await render_job(
                         storyboard, assets_dir=os.path.dirname(photo_files[0]) if photo_files else tempfile_dir(),
                         narration_dir=narration_dir, profiles=profiles, job_id=job_id,
@@ -401,7 +493,7 @@ class LeadOrchestratorAgent:
                     logger.error(f"Render failed: {e}")
                     _emit(job_id, "editor", 92, f"Render failed: {e}")
         else:
-            # R1: editor stage already completed — recover outputs directly.
+            # Editor stage already completed — recover outputs directly.
             saved_editor = existing_job.get("editor_output", {}) or {}
             video_paths = saved_editor.get("video_paths", {}) or {}
             _emit(job_id, "editor", 92, f"Editor output recovered from cache ({len(video_paths)} profile(s)).")
@@ -414,7 +506,7 @@ class LeadOrchestratorAgent:
             _emit(job_id, "done", 100, "Job failed: no video produced.", status="FAILED")
             return {"job_id": job_id, "status": "FAILED"}
 
-        # R2: post-render memory hygiene — delete narration dir and render tmp
+        # Post-render memory hygiene — delete narration dir and render tmp
         # to free RAM/disk before the self-review + RAG stages run.
         try:
             import shutil
@@ -425,11 +517,23 @@ class LeadOrchestratorAgent:
 
         primary_profile = profiles[0] if profiles[0] in video_paths else next(iter(video_paths))
         primary_path = video_paths[primary_profile]
-        # L1: the length we actually honor for the render is the requested length
+        # The length we actually honor for the render is the requested length
         # (shot_composer scaled to it), so compare the self-review against that.
         declared_duration = float(requested_length)
 
-        # ---- M4: Self-review gate ------------------------------------------
+        # EDITOR specialist: what the supervised pass actually changed.
+        try:
+            from app.agents.subagents import record_pipeline_stage as _stage
+            _stage(job_id, "editor", "supervisor", keyword="supervised",
+                   data={"shots": len(storyboard or []),
+                         "profiles": len(video_paths or {}),
+                         "refined": bool(editor_plan),
+                         "edl_revision": int(JobStateService.get_job(job_id, field="edl_revision") or 0)},
+                   note=f"{len(storyboard or [])} shot(s) through the editor pass")
+        except Exception as _se:
+            logger.warning("editor specialist context skipped: %s", _se)
+
+        # ---- Self-review gate -----------------------------------------------
         review_report = {"status": "SKIPPED", "reason": "self-review disabled"}
         if settings.ENABLE_SELF_REVIEW:
             _emit(job_id, "review", 95, "Running self-review quality gate…", sub_agent="SelfReviewAgent")
@@ -441,6 +545,19 @@ class LeadOrchestratorAgent:
                 logger.error(f"Self-review failed: {e}")
                 review_report = {"status": "PASS", "reason": f"review error: {e}"}
 
+        # RENDER specialist: preflight lint over the delivered profiles.
+        try:
+            from app.agents.subagents import record_pipeline_stage as _stage
+            _stage(job_id, "render", "sentinel", keyword="lint",
+                   data={"profiles": list((video_paths or {}).keys()),
+                         "primary": primary_profile,
+                         "review": str(review_report.get("status") or ""),
+                         "warnings": len(review_report.get("issues") or [])},
+                   note=f"packaged {len(video_paths or {})} profile(s); review {review_report.get('status')}",
+                   status="succeeded" if review_report.get("status") != "NEEDS_REVIEW" else "degraded")
+        except Exception as _se:
+            logger.warning("render specialist context skipped: %s", _se)
+
         final_status = "COMPLETE"
         if review_report.get("status") == "NEEDS_REVIEW":
             final_status = "NEEDS_REVIEW"
@@ -448,7 +565,7 @@ class LeadOrchestratorAgent:
                 "error_log": {"stage": "review", "message": review_report.get("reason")}
             })
 
-        # ---- M9: persist memory -------------------------------------------
+        # ---- Persist memory -------------------------------------------------
         if settings.ENABLE_RAG:
             try:
                 await rag_service.store_job_memory(job_id, transcript, image_tags, script_out)
@@ -457,7 +574,7 @@ class LeadOrchestratorAgent:
             except Exception as e:
                 logger.error(f"RAG store failed: {e}")
 
-        # ---- M3: budget report (free-tier spend vs cap) -------------------
+        # ---- Budget report (free-tier spend vs cap) -------------------------
         budget = {"calls": 0, "total_cents": 0.0, "within_cap": True}
         try:
             from app.agents.sub_agents.budget_governor_agent import BudgetGovernorAgent
@@ -467,7 +584,7 @@ class LeadOrchestratorAgent:
             logger.warning(f"budget report skipped: {be}")
 
         # ---- Finalize ------------------------------------------------------
-        # M5/O2: honest changelog — list the effects actually applied, not a
+        # Honest changelog — list the effects actually applied, not a
         # hardcoded label, and surface the director's edit-decision plan so the
         # edit is transparent and reviewable (ChatCut-style).
         applied_effects = set()

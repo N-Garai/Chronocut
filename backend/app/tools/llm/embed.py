@@ -1,84 +1,51 @@
-import asyncio
 import logging
-from typing import List, Optional
+import hashlib
+from typing import List
 
 logger = logging.getLogger("chronocut.tools.llm.embed")
 
-_EMBED_MODEL = "gemini-embedding-001"
+_EMBED_DIM = 256
 
 
-async def _embed(client, model: str, texts: List[str]):
-    """Version-agnostic embedding call.
+def _embed_text(text: str) -> List[float]:
+    """Deterministic hashing-trick embedding (no external model, no API key).
 
-    In google-genai, ``client.models.embed_content`` is a BLOCKING call (the async
-    variant, when present, is ``embed_content_async``). Awaiting the sync result
-    raises ``object EmbedContentResponse can't be used in 'await' expression``, so
-    we mirror the generate_content pattern from call.py: prefer the async entry
-    point, otherwise run the sync call in an executor.
+    Stable across processes and degrades gracefully, keeping corpus/RAG recall
+    working without any provider credentials or model downloads.
     """
-    from app.config import settings
-    models = client.models
-    if hasattr(models, "embed_content_async"):
-        return await asyncio.wait_for(
-            models.embed_content_async(model=model, contents=list(texts)),
-            timeout=getattr(settings, "GEMINI_CALL_TIMEOUT", 60),
-        )
-    loop = asyncio.get_event_loop()
-    return await asyncio.wait_for(
-        loop.run_in_executor(
-            None, lambda: models.embed_content(model=model, contents=list(texts))
-        ),
-        timeout=getattr(settings, "GEMINI_CALL_TIMEOUT", 60),
-    )
+    vec = [0.0] * _EMBED_DIM
+    for token in (text or "").lower().split():
+        h = int(hashlib.sha256(token.encode("utf-8")).hexdigest(), 16)
+        vec[h % _EMBED_DIM] += 1.0
+    norm = sum(v * v for v in vec) ** 0.5 or 1.0
+    return [v / norm for v in vec]
 
 
-async def embed_texts(texts: List[str], model: str = _EMBED_MODEL) -> List[List[float]]:
-    """Embed texts with Gemini embeddings (free-tier, same API key as generation).
+async def embed_texts(texts: List[str], model: str = "local-hashing") -> List[List[float]]:
+    """Embed texts with a local deterministic hashing embedding.
 
     Returns a list of float vectors aligned with `texts`. Returns [] on any
-    failure (e.g. no API key) so callers can degrade gracefully.
+    failure so callers can degrade gracefully. No provider credentials or
+    external model downloads are required.
     """
     if not texts:
         return []
     try:
-        from app.tools.llm.call import _get_client
-        client = _get_client()
-    except Exception as e:
-        logger.warning(f"embed_texts: client unavailable ({e})")
-        return []
-
-    try:
-        resp = await _embed(client, model, texts)
-        embeddings = getattr(resp, "embeddings", None)
-        if not embeddings:
-            return []
-        return [list(getattr(e, "values", []) or []) for e in embeddings]
+        return [_embed_text(t) for t in texts]
     except Exception as e:
         logger.warning(f"embed_texts failed: {e}")
         return []
 
 
-def embed_texts_sync(texts: List[str], model: str = _EMBED_MODEL) -> List[List[float]]:
+def embed_texts_sync(texts: List[str], model: str = "local-hashing") -> List[List[float]]:
     """Synchronous twin of :func:`embed_texts` for use inside sync tool code.
 
-    Gemini's SDK exposes both sync and async embed entrypoints, so this stays
-    free of any running event loop. Returns [] on failure.
+    Returns a list of float vectors aligned with `texts`. Returns [] on failure.
     """
     if not texts:
         return []
     try:
-        from app.tools.llm.call import _get_client
-        client = _get_client()
-    except Exception as e:
-        logger.warning(f"embed_texts_sync: client unavailable ({e})")
-        return []
-
-    try:
-        resp = client.models.embed_content(model=model, contents=list(texts))
-        embeddings = getattr(resp, "embeddings", None)
-        if not embeddings:
-            return []
-        return [list(getattr(e, "values", []) or []) for e in embeddings]
+        return [_embed_text(t) for t in texts]
     except Exception as e:
         logger.warning(f"embed_texts_sync failed: {e}")
         return []

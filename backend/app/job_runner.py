@@ -4,7 +4,7 @@ Why this exists
 ---------------
 The original API ran the entire production pipeline inside the web-server
 process via ``BackgroundTasks``. A heavy job (large ZIP buffered in memory,
-ffmpeg building many segments, a Chromium-based overlay renderer, Gemini
+ffmpeg building many segments, a Chromium-based overlay renderer
 calls) could balloon the process's RAM and the whole uvicorn worker got OOM-
 killed — which is exactly what was observed in the logs (the server "restarted"
 mid-job). Because the pipeline also held the only copy of job state in that
@@ -162,7 +162,7 @@ class JobRunner:
                         await self._queue.put(jid)
                         logger.warning(f"reclaimed stale PROCESSING job {jid}")
                 elif st == "FAILED":
-                    # R1: re-queue FAILED jobs that died in the worker (OOM / crash)
+                    # Re-queue FAILED jobs that died in the worker (OOM / crash)
                     # after a grace period so transient infra failures auto-recover.
                     err = (j.get("error_log") or {}).get("stage")
                     msg = (j.get("error_log") or {}).get("message", "")

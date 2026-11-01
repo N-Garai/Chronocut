@@ -16,8 +16,16 @@ def _sb():
     ]
 
 
+def _scratch_dir(tmp_path={}) -> str:
+    """Host-portable scratch dir (a hard-coded /tmp does not exist on Windows)."""
+    import tempfile
+    d = tempfile.mkdtemp(prefix="cc_hf_test_")
+    return os.path.join(d, "")
+
+
 def test_build_spec_has_intro_lower_outro():
-    spec = hf.build_spec(_sb(), "/tmp", 15.0, title="My Story")
+    d = _scratch_dir()
+    spec = hf.build_spec(_sb(), d, 15.0, title="My Story")
     kinds = [s["kind"] for s in spec]
     assert "intro" in kinds and "outro" in kinds
     lowers = [s for s in spec if s["kind"] == "lower"]
@@ -57,7 +65,8 @@ def test_compose_overlays_unavailable_returns_false():
     # forcing the caller's drawtext fallback. No Chromium needed.
     settings.TEXT_OVERLAY_ENGINE = "drawtext"
     prof = type("P", (), {"width": 1280, "height": 720, "fps": 30, "codec": "libx264"})()
-    ok = hf.compose_overlays(_sb(), "/tmp", prof, "/tmp/base.mp4", "/tmp/out.mp4", title="T")
+    base = _scratch_dir()
+    ok = hf.compose_overlays(_sb(), base, prof, os.path.join(base, "base.mp4"), os.path.join(base, "out.mp4"), title="T")
     assert ok is False
     settings.TEXT_OVERLAY_ENGINE = "drawtext"  # restore
 
@@ -91,10 +100,12 @@ def test_render_webm_passes_chrome_args_and_low_memory(monkeypatch):
 
     # Make the composite step think a webm was produced.
     import pathlib
-    out = pathlib.Path("/tmp") / "cc_hf_test.webm"
+    d = pathlib.Path(_scratch_dir())
+    d.mkdir(parents=True, exist_ok=True)
+    out = d / "cc_hf_test.webm"
     out.write_bytes(b"x")
 
-    ok = hf._render_webm("/tmp", str(out), 1280, 720, 30)
+    ok = hf._render_webm(str(d), str(out), 1280, 720, 30)
     assert ok is True
     assert "--low-memory-mode" in captured["cmd"]
     assert "--workers" in captured["cmd"] and "1" in captured["cmd"]

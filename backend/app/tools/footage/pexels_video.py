@@ -12,7 +12,7 @@ logger = logging.getLogger("chronocut.tools.footage.pexels_video")
 
 PEXELS_VIDEO_BASE = "https://api.pexels.com/videos"
 
-# C5: auto-resetting per-hour quota guard (replaces an unused static counter).
+# Auto-resetting per-hour quota guard.
 _lock = threading.Lock()
 _request_times: list[float] = []
 
@@ -29,7 +29,7 @@ def _admit_request(max_per_hour: int) -> bool:
 
 
 def _quality_rank(video: dict) -> float:
-    """C2: prefer higher resolution / 'hd'/'uhd' quality and longer clips."""
+    """Prefer higher resolution / 'hd'/'uhd' quality and longer clips."""
     best = 0
     dur = float(video.get("duration", 0) or 0)
     for f in (video.get("video_files") or []):
@@ -70,7 +70,7 @@ def search_pexels_videos(query: str, per_page: int = 3) -> list[dict]:
         logger.warning("search_pexels_videos: per-hour quota guard tripped; skipping")
         return []
 
-    # C5: tenacity exponential backoff on transient/quota errors (honors Retry-After
+    # Tenacity exponential backoff on transient/quota errors (honors Retry-After
     # via the caller's sleep is implicit; we retry a bounded number of times).
     call = _fetch
     if retry is not None:
@@ -96,7 +96,7 @@ def search_pexels_videos(query: str, per_page: int = 3) -> list[dict]:
         files = video.get("video_files") or []
         if not files:
             continue
-        # C2: rank video_files by quality and pick the best link.
+        # Rank video_files by quality and pick the best link.
         best_file = max(files, key=lambda f: int(f.get("width") or 0)
                         + (10 if f.get("quality") in ("hd", "uhd") else 0))
         link = best_file.get("link")

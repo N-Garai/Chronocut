@@ -1,4 +1,4 @@
-"""SelfReviewAgent (M4) — mandatory quality gate before delivery.
+"""SelfReviewAgent — mandatory quality gate before delivery.
 
 Delegates to the review toolkit (ffprobe, frame sampler, audio levels,
 delivery promise, slideshow detector). Returns PASS | NEEDS_REVIEW | FAIL.

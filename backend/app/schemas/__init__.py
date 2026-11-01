@@ -1,4 +1,4 @@
-"""Domain schemas (v2 M2/M8).
+"""Domain schemas.
 
 Lightweight pydantic models that document the API contract and validate
 inputs. Kept minimal and free-tier safe — no extra storage or processing.

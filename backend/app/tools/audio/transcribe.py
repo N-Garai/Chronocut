@@ -4,27 +4,14 @@ from typing import Optional, Dict, Any, List
 
 logger = logging.getLogger("chronocut.tools.audio")
 
-__all__ = ["gemini_audio_transcribe", "whisper_transcribe", "synthesize_speech", "get_duration"]
+__all__ = [
+    "provider_audio_transcribe", "whisper_transcribe", "synthesize_speech",
+    "get_duration",
+]
 
-# R5: session-level flag to skip edge-tts after a 403 block. Uses a file sentinel
-# so the flag survives across multiprocessing child processes (each job runs in
-# a fresh spawned process, so module-level vars don't persist).
-_EDGE_TTS_BLOCKED_FLAG = "/tmp/chronocut_edge_tts_blocked"
-
-
-def _is_edge_tts_blocked() -> bool:
-    try:
-        return os.path.exists(_EDGE_TTS_BLOCKED_FLAG)
-    except Exception:
-        return False
-
-
-def _mark_edge_tts_blocked() -> None:
-    try:
-        with open(_EDGE_TTS_BLOCKED_FLAG, "w") as f:
-            f.write("blocked")
-    except Exception:
-        pass
+# Module-level, lazily-loaded MMS-TTS model (loaded once per process).
+_TTS_PROCESSOR = None
+_TTS_MODEL = None
 
 
 def get_duration(file_path: str) -> float:
@@ -40,39 +27,52 @@ def get_duration(file_path: str) -> float:
         return 0.0
 
 
-async def gemini_audio_transcribe(file_path: str, language: str = "en", job_id: Optional[str] = None) -> Dict[str, Any]:
-    """Transcribe audio via Gemini native audio (free-tier Flash)."""
-    from app.tools.llm.call import scored_gemini_call
-    try:
-        with open(file_path, "rb") as f:
-            data = f.read()
-    except Exception as e:
-        return {"full_text": "", "segments": [], "language": language, "duration_seconds": 0, "error": str(e)}
+async def provider_audio_transcribe(file_path: str, language: str = "en", job_id: Optional[str] = None) -> Dict[str, Any]:
+    """Provider-delegating transcription entrypoint.
 
-    mime = {
-        ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4",
-        ".aac": "audio/aac", ".ogg": "audio/ogg", ".flac": "audio/flac",
-        ".opus": "audio/opus",
-    }.get(os.path.splitext(file_path)[1].lower(), "audio/wav")
+    Chain: Meta muse-voice-transcribe (multipart ASR, <=10 min windows with
+    overlap) -> local Whisper. Whichever path answers wins; the provider/model
+    metadata is returned with the transcript. ASR audio-seconds cost is recorded
+    in the ledger for the Meta path.
+    """
+    from app.config import settings
 
-    prompt = (
-        f"Transcribe this audio in language '{language}'. "
-        "Return each line as: start_seconds - end_seconds: spoken text. "
-        "Use real timestamps. Keep words exactly as spoken (do not invent)."
-    )
-    try:
-        raw = await scored_gemini_call(
-            prompt, system="You are a precise multilingual transcription engine.",
-            job_id=job_id, agent="archivist", tool="gemini_audio_transcribe",
-            temperature=0.2, max_output_tokens=4096,
-            media=[{"data": data, "mime_type": mime}], json_mode=False,
-        )
-        segments = _parse_transcript(raw)
-        duration = segments[-1]["end"] if segments else get_duration(file_path)
-        return {"full_text": raw, "segments": segments, "language": language, "duration_seconds": duration}
-    except Exception as e:
-        logger.error(f"Gemini transcription failed: {e}")
-        return {"full_text": "", "segments": [], "language": language, "duration_seconds": get_duration(file_path), "error": str(e)}
+    provider_name = (settings.LLM_PROVIDER or "meta").strip().lower()
+    if provider_name == "meta" and settings.provider_api_key:
+        try:
+            from app.tools.audio.meta_asr import transcribe_wav_chunked, ASRError
+            res = await transcribe_wav_chunked(file_path, job_id=job_id, language=language)
+            if res.get("segments") or res.get("full_text"):
+                try:
+                    from app.tools.llm.governor import asr_cost_cents, record_call
+                    cost = asr_cost_cents(float(res.get("audio_seconds") or 0.0))
+                    record_call(job_id, agent="archivist", tool="meta_asr",
+                                model=settings.META_ASR_MODEL,
+                                prompt_tokens=0, completion_tokens=0,
+                                cost_cents=cost, cached=False, duration_ms=0)
+                except Exception as gc_err:
+                    logger.warning("asr cost ledger failed: %s", gc_err)
+                out = {
+                    "full_text": res.get("full_text", ""),
+                    "segments": res.get("segments", []),
+                    "language": language,
+                    "duration_seconds": float(res.get("audio_seconds") or 0.0),
+                    "provider": res.get("provider", "meta"),
+                    "chunks": res.get("chunks", 0),
+                }
+                return out
+            raise ASRError("meta asr returned empty transcript")
+        except Exception as e:
+            logger.warning("Meta ASR failed, falling back: %s", e)
+
+    # Local Whisper (optional, no API cost).
+    res = whisper_transcribe(file_path, language=language, model=settings.WHISPER_MODEL)
+    if res.get("full_text"):
+        res.setdefault("provider", "whisper")
+        return res
+    return {"full_text": "", "segments": [], "language": language,
+            "duration_seconds": get_duration(file_path), "provider": "none",
+            "error": "all transcription providers failed"}
 
 
 def whisper_transcribe(file_path: str, language: str = "en", model: str = "base") -> Dict[str, Any]:
@@ -95,95 +95,59 @@ def whisper_transcribe(file_path: str, language: str = "en", model: str = "base"
         return {"full_text": "", "segments": [], "language": language, "duration_seconds": 0, "error": str(e)}
 
 
-async def synthesize_speech(text: str, language: str = "en", out_path: Optional[str] = None) -> Optional[str]:
-    """Free TTS. edge-tts (neural, no key) is primary; gTTS is the fallback.
+def _load_tts():
+    """Lazy-load the Meta MMS-TTS model once per process."""
+    global _TTS_PROCESSOR, _TTS_MODEL
+    if _TTS_MODEL is not None:
+        return _TTS_PROCESSOR, _TTS_MODEL
+    try:
+        from transformers import VoxPopuliV2Processor, VoxPopuliV2ForConditionalGeneration
+        from app.config import settings
+        model_name = getattr(settings, "MMS_TTS_MODEL", "facebook/mms-tts-eng")
+        processor = VoxPopuliV2Processor.from_pretrained(model_name)
+        model = VoxPopuliV2ForConditionalGeneration.from_pretrained(model_name)
+        _TTS_PROCESSOR, _TTS_MODEL = processor, model
+        return processor, model
+    except Exception as e:
+        logger.warning(f"MMS-TTS model load failed: {e}")
+        _TTS_MODEL = object()  # sentinel: mark attempted
+        _TTS_PROCESSOR = None
+        return None, None
 
-    A6: this is an async function so it is ``await``ed from the orchestrator —
-    the previous Gemini-TTS fallback used ``asyncio.run`` inside the async path,
-    which raised RuntimeError. That fallback is removed (Gemini returns no audio
-    here); gTTS/edge-tts are the real free paths.
+
+async def synthesize_speech(text: str, language: str = "eng", out_path: Optional[str] = None) -> Optional[str]:
+    """Text-to-speech using Meta MMS-TTS open weights (local, no API key).
+
+    Synthesizes ``text`` into ``out_path`` (an MP3/WAV). Returns the path on
+    success, ``None`` if synthesis is unavailable or fails. The model is loaded
+    lazily and cached per process so repeated narration is cheap.
     """
     if not text or not text.strip():
         return None
     if out_path is None:
         import tempfile
-        out_path = os.path.join(tempfile.gettempdir(), f"chronocut_tts_{abs(hash(text))}.mp3")
+        out_path = os.path.join(tempfile.gettempdir(), f"chronocut_tts_{abs(hash(text))}.wav")
 
-    # R5: if edge-tts was blocked by a previous 403 (in this or any prior job),
-    # skip it entirely and use gTTS directly.
-    if _is_edge_tts_blocked():
-        return await _gtts_fallback(text, language, out_path)
-
-    # J2: edge-tts primary — free, no API key, neural voices, supports rate/pitch.
-    # N4: capture word-boundary timestamps so the HyperFrames overlay renderer can
-    # burn word-synced (karaoke) captions. Written as a sidecar "<out>.words.json".
+    processor, model = _load_tts()
+    if processor is None or model is object():
+        logger.warning("MMS-TTS unavailable; no audio synthesized")
+        return None
     try:
-        import edge_tts  # type: ignore
-        import io as _io
-        voice = "en-US-GuyNeural" if (language or "en") == "en" else None
-        comm = edge_tts.Communicate(text, voice) if voice else edge_tts.Communicate(text)
-        words: List[Dict[str, Any]] = []
-        audio_buffer = _io.BytesIO()
-        tts_error = None
-        try:
-            async for ev in comm.stream():
-                if getattr(ev, "type", None) == "WordBoundary" and getattr(ev, "text", None):
-                    offset_s = float(getattr(ev, "offset", 0) or 0) / 10_000_000.0
-                    dur_s = float(getattr(ev, "duration", 0) or 0) / 10_000_000.0
-                    words.append({"word": ev.text, "start": round(offset_s, 3),
-                                  "end": round(offset_s + dur_s, 3)})
-                elif hasattr(ev, "data") and ev.data:
-                    audio_buffer.write(ev.data)
-        except Exception as e:
-            tts_error = e
-            # If streaming fails (older edge-tts, network hiccup, or 403 block),
-            # fall back to the synchronous save path which uses a fresh stream internally.
-            try:
-                # Re-create Communicate so stream() can be called again.
-                comm2 = edge_tts.Communicate(text, voice) if voice else edge_tts.Communicate(text)
-                await comm2.save(out_path)
-                if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
-                    return out_path
-            except Exception as e2:
-                logger.warning(f"edge-tts save fallback failed: {e2}")
-                # If the error is a 403, skip edge-tts entirely and go to gTTS.
-                if "403" in str(e2) or "Invalid response" in str(e2):
-                    logger.warning("edge-tts blocked (403); falling back to gTTS")
-                    _mark_edge_tts_blocked()
-                    return await _gtts_fallback(text, language, out_path)
-                return None
-        else:
-            try:
-                with open(out_path, "wb") as f:
-                    f.write(audio_buffer.getvalue())
-            except Exception as e2:
-                logger.warning(f"edge-tts write failed: {e2}")
-                return None
-        if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
-            if words:
-                try:
-                    import json
-                    with open(out_path + ".words.json", "w", encoding="utf-8") as wf:
-                        json.dump({"text": text, "words": words}, wf)
-                except Exception:
-                    pass
-            return out_path
-    except Exception as e:
-        logger.warning(f"edge-tts failed: {e}")
-
-    # Fallback: gTTS.
-    return await _gtts_fallback(text, language, out_path)
-
-
-async def _gtts_fallback(text: str, language: str, out_path: str) -> Optional[str]:
-    """gTTS fallback for TTS when edge-tts is unavailable."""
-    try:
-        from gtts import gTTS
-        gTTS(text=text, lang=language or "en", slow=False).save(out_path)
+        import torch
+        import soundfile as sf
+        import numpy as np
+        lang = getattr(model, "config", None)
+        lang = getattr(lang, "lang", None) or language
+        inputs = processor(text=text, return_tensors="pt", language=language)
+        with torch.no_grad():
+            output = model.generate(**inputs)
+        audio = output[0].cpu().numpy().astype(np.float32)
+        sampling_rate = getattr(model.config, "sampling_rate", 16000)
+        sf.write(out_path, audio, sampling_rate)
         if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
             return out_path
     except Exception as e:
-        logger.warning(f"gTTS failed: {e}")
+        logger.warning(f"MMS-TTS synthesis failed: {e}")
     return None
 
 

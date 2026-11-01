@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 import asyncio
 from typing import Optional, Dict, Any, List, Callable
 
@@ -9,7 +10,7 @@ __all__ = ["compose_shots"]
 
 from app.config import settings
 
-# A2/F3: allow-lists so a bad/partial director plan can NEVER inject an invalid
+# Allow-lists so a bad/partial director plan can NEVER inject an invalid
 # value that breaks the render. Anything unrecognized is ignored and the
 # hardcoded mapping is kept (guaranteed no-regression fallback).
 ALLOWED_CAMERA_MOVES = {
@@ -134,7 +135,7 @@ def _build_query(seg: Dict[str, Any], tone: str, shot_keywords: List[str], promp
 
 
 def _apply_director_override(shot: Dict[str, Any], override: Optional[Dict[str, Any]]) -> None:
-    """A2/F2: let the LLM director (or reference_brief-derived plan) override a
+    """Let the LLM director (or reference_brief-derived plan) override a
     shot's look. Every value is validated against an allow-list; invalid entries
     are dropped so the hardcoded mapping remains the guaranteed fallback."""
     if not override:
@@ -158,7 +159,7 @@ def _apply_director_override(shot: Dict[str, Any], override: Optional[Dict[str, 
 
 
 def _scale_to_length(storyboard: List[Dict[str, Any]], length_seconds: Optional[float]) -> None:
-    """L1: honor the user-requested length. Rescale every shot's duration so the
+    """Honor the user-requested length. Rescale every shot's duration so the
     render can't collapse to a 5s clip when 30s was requested.
 
     Shots flagged ``_fixed_duration`` (uploaded photos/videos whose native length
@@ -208,7 +209,7 @@ async def compose_shots(
 ) -> List[Dict[str, Any]]:
     """Assemble the final shot list.
 
-    V: uploaded media (photos + videos) form the *backbone* of the cut. Each
+    Uploaded media (photos + videos) form the *backbone* of the cut. Each
     uploaded clip becomes a shot carrying the narration of the script segments
     mapped to it, so a 'from_media' job is literally built from the upload. B-roll
     is only used to fill any remaining length the uploaded media doesn't cover.
@@ -220,6 +221,18 @@ async def compose_shots(
     video_idx = 0
     n = len(script_segments)
     used_urls: set = set()
+
+    # Wall-clock budget for B-roll resolution. Slow or failing stock providers
+    # must not be able to stall the whole job; after the budget expires the
+    # remaining shots fall straight to matte.
+    footage_deadline = time.monotonic() + float(settings.FOOTAGE_BUDGET_SECONDS or 360)
+
+    def _footage_budget_left() -> bool:
+        return time.monotonic() < footage_deadline
+
+    def _matte_source() -> Dict[str, Any]:
+        return {"type": "color_matte", "url": None, "file": None,
+                "effect": "none", "transition": "crossfade_0.5s"}
 
     # Free-tier OOM guard: cap total shots when there is no uploaded media.
     if not photo_files and not video_clips and n > 6:
@@ -311,13 +324,18 @@ async def compose_shots(
                 bduration = round(float(seg.get("audio_end", 0)) - float(seg.get("audio_start", 0)), 1) or 5.0
                 shot_keywords = [search_keywords[seg_idx % len(search_keywords)]] if search_keywords else []
                 query = _build_query(seg, btone, shot_keywords, user_prompt or "")
-                resolved = await BRollSourcingSpecialist().resolve(
-                    query, duration=bduration, job_id=job_id, profile=profile, avoid_urls=used_urls
-                )
-                if resolved.get("url"):
-                    used_urls.add(resolved["url"])
-                _emit_sub(job_id, "BRollSourcingSpecialist", "StoryboardComposerAgent", 62,
-                          f"Resolved B-roll for '{query[:48]}' → {resolved.get('source', 'unknown')}.")
+                if _footage_budget_left():
+                    resolved = await BRollSourcingSpecialist().resolve(
+                        query, duration=bduration, job_id=job_id, profile=profile, avoid_urls=used_urls
+                    )
+                    if resolved.get("url"):
+                        used_urls.add(resolved["url"])
+                    _emit_sub(job_id, "BRollSourcingSpecialist", "StoryboardComposerAgent", 62,
+                              f"Resolved B-roll for '{query[:48]}' → {resolved.get('source', 'unknown')}.")
+                else:
+                    resolved = {}
+                    _emit_sub(job_id, "BRollSourcingSpecialist", "StoryboardComposerAgent", 62,
+                              f"Footage budget exhausted — B-roll for '{query[:40]}' falls back to matte.")
                 vs = {"type": resolved.get("type", "color_matte"), "url": resolved.get("url"),
                       "file": resolved.get("file"), "effect": resolved.get("effect", "none"),
                       "transition": "crossfade_0.5s"}
@@ -332,7 +350,7 @@ async def compose_shots(
                 remaining -= float(shot["duration_seconds"])
     else:
         for i, seg in enumerate(script_segments):
-            # A5: cooperative cancellation — stop Gemini/CPU usage immediately if the
+            # Cooperative cancellation — stop LLM/CPU usage immediately if the
             # job was cancelled (this is the long B-roll resolution loop).
             if cancel_check and cancel_check():
                 raise asyncio.CancelledError("compose_shots cancelled")
@@ -356,14 +374,19 @@ async def compose_shots(
                     "effect": _effect_for_tone(tone), "transition": "crossfade_0.5s",
                 }
             else:
-                resolved = await BRollSourcingSpecialist().resolve(
-                    query, duration=duration, job_id=job_id, profile=profile, avoid_urls=used_urls
-                )
-                src = resolved.get("source", "unknown")
-                if resolved.get("url"):
-                    used_urls.add(resolved["url"])
-                _emit_sub(job_id, "BRollSourcingSpecialist", "StoryboardComposerAgent", 62,
-                          f"Resolved B-roll for '{query[:48]}' → {src}.")
+                if _footage_budget_left():
+                    resolved = await BRollSourcingSpecialist().resolve(
+                        query, duration=duration, job_id=job_id, profile=profile, avoid_urls=used_urls
+                    )
+                    src = resolved.get("source", "unknown")
+                    if resolved.get("url"):
+                        used_urls.add(resolved["url"])
+                    _emit_sub(job_id, "BRollSourcingSpecialist", "StoryboardComposerAgent", 62,
+                              f"Resolved B-roll for '{query[:48]}' → {src}.")
+                else:
+                    resolved = {}
+                    _emit_sub(job_id, "BRollSourcingSpecialist", "StoryboardComposerAgent", 62,
+                              f"Footage budget exhausted — B-roll for '{query[:40]}' falls back to matte.")
                 visual_source = {
                     "type": resolved.get("type", "color_matte"),
                     "url": resolved.get("url"),
@@ -388,7 +411,7 @@ async def compose_shots(
                 "sound_bed": seg.get("sound_bed") or None,
             }
 
-            # A2/F2: apply director overrides (validated; hardcoded values are fallback).
+            # Apply director overrides (validated; hardcoded values are fallback).
             override = (director_plan or {}).get(seg_id) or (director_plan or {}).get(str(seg_id))
             _apply_director_override(shot, override)
 
@@ -400,7 +423,7 @@ async def compose_shots(
                 if caption:
                     shot["overlay_text"] = caption + ("…" if len(str(text).split()) > 8 else "")
 
-            # L2: redundant-narration guard. If the voiceover would merely restate
+            # Redundant-narration guard. If the voiceover would merely restate
             # the visual query (e.g. "rainy neon city" spoken over rainy-neon footage),
             # drop the voiceover so the visuals can breathe and we don't double-say.
             if shot.get("voiceover") is not False and text and visuals:

@@ -1,8 +1,7 @@
 """VisualMatcherSpecialist — semantic match of a text query to a visual.
 
 Single-query primitive used by the B-roll sourcing stage. Delegates to the
-footage resolver (corpus -> Pexels -> Pixabay -> Wikimedia -> NASA ->
-Pollinations -> matte). No extra model calls beyond the resolver itself.
+footage resolver (corpus -> Pexels -> Pixabay -> Wikimedia -> NASA -> matte). No extra model calls beyond the resolver itself.
 """
 from typing import Dict, Any, Optional
 

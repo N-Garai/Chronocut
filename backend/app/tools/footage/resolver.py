@@ -68,7 +68,7 @@ def _cache(query: str, url: str, source: str, modality: str, fpath: str) -> None
 
 
 def _alternate_queries(query: str) -> list[str]:
-    """C3: re-search phrasings — drop descriptive tone words, then try the raw
+    """Re-search phrasings — drop descriptive tone words, then try the raw
     noun phrase, then a generic fallback so we 'search properly when necessary'."""
     q = (query or "").strip()
     if not q:
@@ -92,10 +92,10 @@ def _alternate_queries(query: str) -> list[str]:
 
 def _download_first(hits, asset_dir, job_id, effect="none", modality="video",
                     source_label="source", avoid_urls=None) -> dict | None:
-    """C2/C3: try each ranked hit (hits[0], then hits[1..]) and return the first
+    """Try each ranked hit (hits[0], then hits[1..]) and return the first
     that downloads successfully. Returns None if all fail.
 
-    V: ``avoid_urls`` lets the caller skip clips already used by other shots so a
+    ``avoid_urls`` lets the caller skip clips already used by other shots so a
     single matched clip never repeats across the storyboard. Tries non-avoided
     hits first, then falls back to the full list if every hit was avoided (so a
     shot is never left without footage).
@@ -127,7 +127,7 @@ def _download_first(hits, asset_dir, job_id, effect="none", modality="video",
 def resolve_visual(query: str, duration: float = 5.0, job_id: str = None, profile: str = "youtube_landscape", avoid_urls=None) -> dict:
     asset_dir = _asset_dir()
 
-    # Tier0: semantic footage corpus (M6) — Gemini-embedding similarity search.
+    # Tier0: semantic footage corpus — embedding similarity search.
     try:
         from app.config import settings
         if settings.ENABLE_FOOTAGE_CORPUS:
@@ -148,8 +148,8 @@ def resolve_visual(query: str, duration: float = 5.0, job_id: str = None, profil
     except Exception as e:
         logger.warning(f"resolve_visual Tier0 (corpus) failed: {e}")
 
-    # Tier1: Pexels videos (requires PEXELS_API_KEY). C1/C3: try the primary
-    # query then progressively simpler alternate queries; C2: iterate hits.
+    # Tier1: Pexels videos (requires PEXELS_API_KEY). Try the primary
+    # query then progressively simpler alternate queries, iterating hits.
     try:
         from app.tools.footage.pexels_video import search_pexels_videos
         for q in _alternate_queries(query) or [query]:
@@ -203,7 +203,7 @@ def resolve_visual(query: str, duration: float = 5.0, job_id: str = None, profil
     except Exception as e:
         logger.warning(f"resolve_visual Tier3 (wikimedia/archive/nasa) failed: {e}")
 
-    # Tier3b: stock IMAGES (Pexels photos + Wikimedia images). V: combined with the
+    # Tier3b: stock IMAGES (Pexels photos + Wikimedia images), combined with the
     # video tiers above this guarantees a rich pool -- when no stock VIDEO matches a
     # shot we still get a relevant still (rendered with ken_burns motion) instead of
     # dropping to a matte. Images are preferred over AI generation (Tier4).
@@ -235,24 +235,6 @@ def resolve_visual(query: str, duration: float = 5.0, job_id: str = None, profil
                 return resolved
     except Exception as e:
         logger.warning(f"resolve_visual Tier3b (images) failed: {e}")
-
-    # Tier4: Pollinations AI image. C6: this is a STILL, so it is labeled as an
-    # image (never motion B-roll) and gets a ken_burns effect, not "pexels_broll".
-    try:
-        from app.tools.footage.download_asset import download_asset
-        url = f"https://image.pollinations.ai/prompt/{quote(query[:120])}"
-        f = download_asset(url, asset_dir, job_id=job_id)
-        if f and os.path.exists(f):
-            _cache(query, url, "pollinations", "image", f)
-            return {
-                "type": "pollinations_ai",
-                "url": url,
-                "file": f,
-                "source": "pollinations",
-                "effect": "ken_burns_slow_zoom",
-            }
-    except Exception as e:
-        logger.warning(f"resolve_visual Tier4 (pollinations) failed: {e}")
 
     # Tier5: generated color matte.
     logger.info(f"resolve_visual: all tiers exhausted for '{query}'; using matte fallback")

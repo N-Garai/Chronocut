@@ -24,6 +24,21 @@ export function useJobEvents(jobId) {
     }
     esRef.current = es
     es.onopen = () => setConnected(true)
+    // Named events (the backend marks these, so onmessage never sees them):
+    // agent_activity rows land in the same array the pipeline stages use,
+    // keeping the Studio console continuous across both formats.
+    es.addEventListener('agent_activity', (ev) => {
+      try {
+        const data = JSON.parse(ev.data)
+        setEvents((prev) => [...prev.slice(-200), { ...data, stage: 'agent_activity' }])
+      } catch { /* ignore */ }
+    })
+    es.addEventListener('edl_revision', (ev) => {
+      try {
+        const data = JSON.parse(ev.data)
+        setEvents((prev) => [...prev.slice(-200), { ...data, stage: data.stage || 'edl_updated' }])
+      } catch { /* ignore */ }
+    })
     es.onmessage = (ev) => {
       try {
         const data = JSON.parse(ev.data)

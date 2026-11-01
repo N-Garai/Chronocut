@@ -16,7 +16,7 @@ class BaseTool:
 
 
 class ToolRegistry:
-    """Runtime-discovered tool registry (OpenMontage pattern).
+    """Runtime-discovered tool registry.
 
     Tools self-register via the @tool decorator. The orchestrator queries the
     registry for available capabilities instead of hard-coding imports, which
@@ -56,22 +56,62 @@ class ToolRegistry:
         return list(self._tools.values())
 
     def support_envelope(self) -> Dict[str, Any]:
-        """Live capability map for /api/v1/capabilities."""
+        """Live capability map for /api/v1/capabilities.
+
+        Every entry reflects the configuration actually loaded at runtime: the
+        active text provider, the speech-to-text and vision modality it serves,
+        optional generated stills, and the render profiles the furnace can
+        produce. The UI and the agents read this instead of hard-coding a
+        provider menu.
+        """
         from app.config import settings
+
+        provider, model = settings.model_badge
+        provider_key = bool(settings.provider_api_key)
+        is_meta = provider == "meta"
+
+        transcribe_providers = []
+        if is_meta and provider_key:
+            transcribe_providers.append("meta_asr")
+        transcribe_providers.append("whisper_local")
+
+        vision_providers = ["meta_vision"] if is_meta and provider_key else []
+
+        try:
+            from app.tools.render.profiles import PROFILES
+            profile_names = list(PROFILES.keys())
+        except Exception:  # pragma: no cover - profiles are always importable
+            profile_names = []
+
+        image_gen = settings.image_gen_provider != "off"
         env = {
+            "text": {
+                "enabled": provider_key,
+                "provider": provider,
+                "model": model,
+                "fallback": "deterministic templates",
+                "note": "All generation flows through the provider layer; without a key the pipeline runs deterministic fallbacks",
+            },
             "audio_transcribe": {
                 "enabled": True,
-                "providers": ["gemini_audio", "whisper_local"] if True else [],
-                "note": "Gemini native audio; Whisper local fallback if installed",
+                "providers": transcribe_providers,
+                "model": settings.META_ASR_MODEL if is_meta else None,
+                "note": "Provider speech-to-text first, local Whisper last",
             },
             "image_tag": {
                 "enabled": True,
-                "providers": ["gemini_vision"],
+                "providers": vision_providers,
+                "model": model if is_meta else None,
+            },
+            "video_understanding": {
+                "enabled": bool(is_meta and provider_key),
+                "providers": ["meta_files_api"] if is_meta and provider_key else [],
+                "note": "Whole-clip summaries through the provider Files API; skipped when unavailable",
             },
             "vision_embed": {
                 "enabled": True,
-                "providers": ["gemini_embed"],
-                "note": "Gemini text-embedding-004 (semantic footage corpus)",
+                "providers": [],
+                "note": "Semantic footage corpus embeddings; deterministic lexical match without it",
             },
             "footage_search": {
                 "enabled": True,
@@ -83,7 +123,13 @@ class ToolRegistry:
                     "archive_org": True,
                     "nasa": True,
                 },
-                "note": "Four-tier fallback chain: corpus -> pexels -> pixabay -> wikimedia -> pollinations -> matte",
+                "note": "Fallback chain: corpus -> stock providers -> free archives -> generated stills -> deterministic matte",
+            },
+            "image_gen": {
+                "enabled": image_gen,
+                "providers": [settings.image_gen_provider] if image_gen else [],
+                "model": "flux-1-schnell" if image_gen else None,
+                "note": "Optional generated B-roll stills; degrades to stills/footage when off or out of quota",
             },
             "script": {
                 "enabled": True,
@@ -95,8 +141,11 @@ class ToolRegistry:
             },
             "render": {
                 "enabled": True,
-                "providers": ["moviepy", "ffmpeg"],
-                "profiles": ["youtube_landscape", "shorts", "square", "cinematic", "youtube_4k", "reels", "tiktok", "linkedin"],
+                "providers": ["ffmpeg", "moviepy_fallback"],
+                "engine": settings.text_overlay_engine,
+                "dispatcher": settings.render_dispatcher,
+                "max_height": settings.MAX_RENDER_RESOLUTION,
+                "profiles": profile_names,
             },
             "audio_post": {
                 "enabled": True,
@@ -105,6 +154,10 @@ class ToolRegistry:
             "review": {
                 "enabled": settings.ENABLE_SELF_REVIEW,
                 "providers": ["ffprobe", "frame_sampler", "audio_levels", "delivery_promise", "slideshow_detector"],
+            },
+            "edl": {
+                "enabled": True,
+                "providers": ["validate", "operations", "revision_store", "compiler", "otio_export"],
             },
             "cache": {
                 "enabled": True,

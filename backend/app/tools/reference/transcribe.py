@@ -43,7 +43,7 @@ def _extract_audio(video_path: str, audio_path: str) -> bool:
 def transcribe(audio_path: str, language: str = "en") -> dict:
     """Transcribe audio to text + segments.
 
-    Prefers local Whisper; falls back to Gemini audio transcription.
+    Prefers local Whisper; falls back to provider transcription.
     Returns a dict with keys: full_text, segments, language, duration_seconds.
     """
     result: dict = {"full_text": "", "segments": [], "language": language, "duration_seconds": 0.0}
@@ -68,15 +68,17 @@ def transcribe(audio_path: str, language: str = "en") -> dict:
         result["language"] = wr.get("language", language)
         return result
     except ImportError:
-        logger.info("whisper not installed; falling back to Gemini transcription")
+        logger.info("whisper not installed; falling back to provider transcription")
     except Exception as e:
-        logger.warning(f"whisper transcription failed: {e}; falling back to Gemini")
+        logger.warning(f"whisper transcription failed: {e}; falling back to provider transcription")
 
-    # --- Fallback: Gemini audio transcription ------------------------------
+    # --- Fallback: provider audio transcription --
     try:
-        from app.tools.audio.transcribe import gemini_audio_transcribe  # lazy import
+        import asyncio as _aio
 
-        g = gemini_audio_transcribe(audio_path, language=language)
+        from app.tools.audio.transcribe import provider_audio_transcribe  # lazy import
+
+        g = _aio.run(provider_audio_transcribe(audio_path, language=language))
         if g and isinstance(g, dict):
             result["full_text"] = g.get("full_text", "") or ""
             result["segments"] = g.get("segments", []) or []
@@ -85,8 +87,8 @@ def transcribe(audio_path: str, language: str = "en") -> dict:
                 result["duration_seconds"] = float(g.get("duration_seconds", 0.0) or 0.0)
             return result
     except ImportError:
-        logger.info("gemini_audio_transcribe not available")
+        logger.info("provider_audio_transcribe not available")
     except Exception as e:
-        logger.warning(f"gemini transcription failed: {e}")
+        logger.warning(f"provider transcription failed: {e}")
 
     return result

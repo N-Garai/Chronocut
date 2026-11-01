@@ -7,15 +7,9 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 logger = logging.getLogger("chronocut.utils.rate_limiter")
 
-try:
-    from google.api_core.exceptions import ResourceExhausted
-    HAS_GOOGLE_EXCEPTIONS = True
-except ImportError:
-    HAS_GOOGLE_EXCEPTIONS = False
-
 
 class RateLimiter:
-    """Token-bucket style rate limiter for Gemini API calls."""
+    """Token-bucket style rate limiter for LLM API calls."""
     def __init__(self, rpm: int = 15, tpm: int = 1_000_000):
         self.rpm = rpm
         self.tpm = tpm
@@ -71,7 +65,7 @@ def get_rate_limiter() -> RateLimiter:
 
 
 def with_rate_limit(estimated_tokens: int = 1000):
-    """Decorator that adds rate limiting and exponential backoff for Gemini API calls."""
+    """Decorator that adds rate limiting and exponential backoff for LLM API calls."""
     def decorator(func):
         @retry(
             stop=stop_after_attempt(5),
@@ -88,10 +82,7 @@ def with_rate_limit(estimated_tokens: int = 1000):
                 raise RuntimeError("Daily token limit exceeded")
             try:
                 return await func(*args, **kwargs)
-            except Exception as e:
-                if HAS_GOOGLE_EXCEPTIONS and isinstance(e, ResourceExhausted):
-                    logger.warning("Gemini quota exhausted, backing off...")
-                    await asyncio.sleep(30)
+            except Exception:
                 raise
         return wrapper
     return decorator

@@ -1,0 +1,60 @@
+name: Render worker
+
+# Self-hosted renderer triggered by the API's repository_dispatch (Path B):
+# the API container never runs ffmpeg on the 512 MB Render instance.
+on:
+  repository_dispatch:
+    types: [chronocut-render]
+  workflow_dispatch:
+    inputs:
+      render_id:
+        description: "Render document id"
+        required: true
+      job_id:
+        description: "Job id"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chronocut-render-${{ github.event.client_payload.job_id || inputs.job_id }}
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend requirements
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Warm Hugging Face cache (Meta MMS-TTS)
+        working-directory: backend
+        run: |
+          python - <<'PY'
+          from transformers import VoxPopuliV2Processor, VoxPopuliV2ForConditionalGeneration
+          VoxPopuliV2Processor.from_pretrained("facebook/mms-tts-eng")
+          VoxPopuliV2ForConditionalGeneration.from_pretrained("facebook/mms-tts-eng")
+          print("HF cache warmed: facebook/mms-tts-eng")
+          PY
+
+      - name: Render job
+        working-directory: backend
+        env:
+          FIRESTORE_PROJECT_ID: ${{ secrets.FIRESTORE_PROJECT_ID }}
+          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          CHRONOCUT_TMP_DIR: ${{ runner.temp }}/chronocut
+        run: |
+          python -m app.workers.render_worker \
+            --render-id "${{ github.event.client_payload.render_id || inputs.render_id }}"

@@ -61,7 +61,7 @@ def _emit(job_id: Optional[str], progress: int, message: str):
 
 
 def _choose_overlay_engine() -> str:
-    """R3: dynamically choose overlay engine based on available memory.
+    """Dynamically choose overlay engine based on available memory.
 
     HyperFrames needs ~800MB+ free (Chromium + ffmpeg + Python). On Render free
     tier (512MB total) we force drawtext to avoid OOM. On larger instances we
@@ -283,7 +283,7 @@ async def render_job(
             narr_path = await asyncio.to_thread(_concat_narration, narration_files, os.path.join(tmp, "narration.m4a"))
             _emit(job_id, 55 + pi * 10, f"Narration mixed for {pname}")
 
-            # L1: total video duration (already scaled to requested length) so the
+            # Total video duration (already scaled to requested length) so the
             # audio track is padded to match and the final mux can't collapse.
             total_video_dur = sum(float(shot.get("duration_seconds", 3.0)) for shot in storyboard)
 

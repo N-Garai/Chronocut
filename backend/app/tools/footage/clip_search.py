@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger("chronocut.tools.footage.clip_search")
 
-# Collection used by the searchable footage corpus (M6). Stored in Firestore
+# Collection used by the searchable footage corpus. Stored in Firestore
 # (free tier) or the local JSON store via JobStateService.
 _COLLECTION = "footage_cache"
 _THRESHOLD = 0.74
@@ -20,7 +20,7 @@ def _cosine(a: List[float], b: List[float]) -> float:
 
 
 def corpus_search(query: str, top_k: int = 5, modality: str = None) -> List[Dict[str, Any]]:
-    """Semantic search over the footage corpus using Gemini text embeddings.
+    """Semantic search over the footage corpus using local text embeddings.
 
     Returns the best matching cached visuals (URLs). Falls back to a token
     overlap score when embeddings are unavailable (e.g. no API key).
@@ -71,7 +71,7 @@ def corpus_search(query: str, top_k: int = 5, modality: str = None) -> List[Dict
 
 
 def store_footage(query: str, url: str, source: str, modality: str, local_path: str = None) -> None:
-    """Persist a resolved visual into the semantic footage corpus (M6)."""
+    """Persist a resolved visual into the semantic footage corpus."""
     from app.services.firestore_service import JobStateService, sha256_text
     try:
         from app.tools.llm.embed import embed_texts_sync

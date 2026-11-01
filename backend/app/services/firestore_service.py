@@ -299,8 +299,12 @@ class JobStateService:
         return cls.get_job(job_id)
 
     @classmethod
-    def get_job(cls, job_id: str) -> Optional[Dict[str, Any]]:
-        return cls._get_doc(cls.COLLECTION, job_id)
+    def get_job(cls, job_id: str, field: Optional[str] = None) -> Any:
+        """Job document, or one field of it when ``field`` is given."""
+        doc = cls._get_doc(cls.COLLECTION, job_id)
+        if doc is None or not field:
+            return doc
+        return doc.get(field)
 
     @classmethod
     def list_jobs(cls, limit: int = 20) -> List[Dict[str, Any]]:

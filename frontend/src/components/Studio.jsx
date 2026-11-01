@@ -2,15 +2,16 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { Cpu, UploadCloud, Link2, PenLine, ArrowRight, Check, Loader2, Coins, ShieldCheck, AlertTriangle } from 'lucide-react'
 import RevealText from './RevealText'
 import Magnetic from './Magnetic'
-import { createJob, getLedger, getReview } from '../lib/api'
+import { getLedger, getReview } from '../lib/api'
 
 const PROFILES = [
-  ['youtube_landscape', 'YouTube 16:9'],
-  ['youtube_portrait', 'YouTube 9:16'],
+  ['youtube_landscape', 'YouTube 720p'],
+  ['youtube_1080', 'YouTube 1080p'],
   ['instagram_portrait', 'Reels 9:16'],
   ['instagram_square', 'IG Square 1:1'],
-  ['twitter_landscape', 'X 16:9'],
-  ['square_1080', 'Square 1080'],
+  ['shorts', 'Shorts 9:16'],
+  ['linkedin', 'LinkedIn 16:9'],
+  ['cinematic', 'Cinematic'],
 ]
 
 export default function Studio({ activeJob, jobStatus, caps, createJob, uploading, uploadError }) {
@@ -55,12 +56,10 @@ export default function Studio({ activeJob, jobStatus, caps, createJob, uploadin
         targetAudience: targetAudience.trim() || undefined,
       }
       if (mode === 'from_media') {
-        if (!files.length) throw new Error('Add at least one media file')
-        const { default: JSZip } = await import('jszip')
-        const zip = new JSZip()
-        const folder = zip.folder('media')
-        for (const f of files) folder.file(f.name, f)
-        payload.file = await zip.generateAsync({ type: 'blob' })
+        if (!files.length) throw new Error('Add at least one file')
+        // Raw files ride as media[] so any type keeps its name and extension
+        // (a browser-built ZIP was memory-heavy and lost that information).
+        payload.mediaFiles = files
       } else if (mode === 'from_reference') {
         if (!referenceUrl.trim()) throw new Error('Paste a reference video URL')
         payload.referenceUrl = referenceUrl.trim()
@@ -133,7 +132,7 @@ export default function Studio({ activeJob, jobStatus, caps, createJob, uploadin
                     ref={fileRef}
                     type="file"
                     multiple
-                    accept="audio/*,image/*,video/*"
+                    accept="*/*"
                     className="hidden"
                     onChange={(e) => onPickFiles(e.target.files)}
                   />
@@ -143,7 +142,7 @@ export default function Studio({ activeJob, jobStatus, caps, createJob, uploadin
                   >
                     <UploadCloud size={30} className="text-cyanglow" />
                     <span className="font-mono text-[11px] uppercase tracking-widest2 text-bone/70">
-                      {files.length ? `${files.length} file(s) selected` : 'select audio, photos, video'}
+                      {files.length ? `${files.length} file(s) selected` : 'select audio, photos, video, documents — any file'}
                     </span>
                   </button>
                 </>
@@ -191,7 +190,7 @@ export default function Studio({ activeJob, jobStatus, caps, createJob, uploadin
               )}
 
               <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest2 text-bone/60">Output Profiles (M8)</label>
+                <label className="font-mono text-[10px] uppercase tracking-widest2 text-bone/60">Output Profiles</label>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {PROFILES.map(([k, label]) => (
                     <button
@@ -241,7 +240,7 @@ export default function Studio({ activeJob, jobStatus, caps, createJob, uploadin
             <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
               <div className="flex items-center gap-2">
                 <Cpu size={16} className="text-cyanglow" />
-                <span className="font-mono text-[10px] uppercase tracking-widest2 text-bone/70">Capabilities (M2)</span>
+                <span className="font-mono text-[10px] uppercase tracking-widest2 text-bone/70">Capabilities</span>
               </div>
               {Object.keys(envelope).length === 0 ? (
                 <p className="mt-3 font-mono text-[10px] uppercase tracking-widest2 text-bone/40">loading...</p>

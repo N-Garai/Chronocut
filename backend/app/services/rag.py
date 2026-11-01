@@ -34,7 +34,7 @@ def _build_text(transcript: str, image_tags: Dict[str, Any], script: Dict[str, A
 
 async def store_job_memory(job_id: str, transcript: str, image_tags: Dict[str, Any],
                            script: Dict[str, Any]) -> None:
-    """Persist a semantic memory of this job (M9): embed + store the vector."""
+    """Persist a semantic memory of this job: embed + store the vector."""
     from app.services.firestore_service import JobStateService
     try:
         text = _build_text(transcript, image_tags, script)
@@ -70,10 +70,10 @@ async def store_successful_script(script_hash: str, script: Dict[str, Any], job_
 
 
 async def find_similar(job_id: str, query_text: str, top_k: int = 3) -> List[Dict[str, Any]]:
-    """Recall past similar projects via cosine similarity over stored embeddings (M9).
+    """Recall past similar projects via cosine similarity over stored embeddings.
 
     Falls back to token-overlap similarity when embeddings are unavailable
-    (e.g. no API key configured). Free-tier: embeddings use Gemini's free
+    (e.g. no API key configured). Free-tier: embeddings use local hashing
     text-embedding model; vectors are stored in Firestore or the local JSON store.
     """
     from app.services.firestore_service import JobStateService

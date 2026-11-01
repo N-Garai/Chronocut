@@ -1,98 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
-import gsap from 'gsap'
-import { Play, Pause, Download, FileText, Film, Volume2, Check, MonitorPlay } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { Play, Download, FileText, MonitorPlay } from 'lucide-react'
 import RevealText from './RevealText'
 import Magnetic from './Magnetic'
 import { videoUrl } from '../lib/api'
-import { polaroidSVG } from '../lib/polaroids'
 import JSZip from 'jszip'
 
-const DURATION = 227
-
-function MockVideo({ playing, progress, onToggle, onProgress }) {
-  const canvasRef = useRef(null)
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    const img = new Image()
-    img.src = polaroidSVG({ mode: 'cut', seed: 12, hue: 10 })
-    let raf
-    let start = performance.now()
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.5)
-    const resize = () => {
-      const rect = canvas.parentElement.getBoundingClientRect()
-      canvas.width = rect.width * dpr
-      canvas.height = rect.height * dpr
-    }
-    resize()
-    window.addEventListener('resize', resize)
-    const draw = (t) => {
-      const elapsed = (t - start) / 1000
-      const scale = 1.15 + Math.sin(elapsed * 0.12) * 0.06
-      const ox = Math.sin(elapsed * 0.07) * 40
-      const oy = Math.cos(elapsed * 0.09) * 30
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      ctx.fillStyle = '#000'
-      ctx.fillRect(0, 0, canvas.width / dpr, canvas.height / dpr)
-      const w = canvas.width / dpr
-      const h = canvas.height / dpr
-      const iw = w * scale
-      const ih = (w * scale * 3) / 4
-      ctx.drawImage(img, (w - iw) / 2 + ox, (h - ih) / 2 + oy, iw, ih)
-      ctx.fillStyle = 'rgba(0,0,0,0.55)'
-      ctx.fillRect(0, 0, w, h)
-      ctx.globalCompositeOperation = 'overlay'
-      const grad = ctx.createLinearGradient(0, 0, w, h)
-      grad.addColorStop(0, 'rgba(255,195,0,0.25)')
-      grad.addColorStop(0.5, 'rgba(0,0,0,0)')
-      grad.addColorStop(1, 'rgba(0,229,255,0.18)')
-      ctx.fillStyle = grad
-      ctx.fillRect(0, 0, w, h)
-      ctx.globalCompositeOperation = 'source-over'
-      if (playing) raf = requestAnimationFrame(draw)
-    }
-    if (playing) raf = requestAnimationFrame(draw)
-    return () => {
-      cancelAnimationFrame(raf)
-      window.removeEventListener('resize', resize)
-    }
-  }, [playing])
-  return (
-    <div className="relative aspect-video w-full overflow-hidden bg-black">
-      <canvas ref={canvasRef} className="h-full w-full" />
-      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40" />
-      <div className="absolute left-5 top-4 flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest2 text-white/80">
-        <Film size={13} className="text-amberglow" /> CHRONOCUT_0001.mp4 — 03:47
-      </div>
-      <div className="absolute right-5 top-4 flex items-center gap-3">
-        <span className="status-chip border border-emerald-400/40 bg-black/40 text-emerald-400">
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> 1080p
-        </span>
-        <Volume2 size={14} className="text-white/70" />
-      </div>
-      <button data-cursor="play" onClick={onToggle} className="group absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2" aria-label={playing ? 'Pause' : 'Play'}>
-        <span className="absolute inset-0 animate-ping rounded-full bg-amberglow/30" style={{ animationIterationCount: playing ? 0 : 'infinite' }} />
-        <span className="relative flex h-24 w-24 items-center justify-center rounded-full border border-white/30 bg-black/50 backdrop-blur-md transition-all duration-300 group-hover:scale-110 group-hover:border-amberglow group-hover:bg-amberglow group-hover:text-void">
-          {playing ? <Pause size={30} /> : <Play size={30} className="ml-1" />}
-        </span>
-      </button>
-      <div className="absolute inset-x-0 bottom-0 px-5 pb-4">
-        <div className="mb-2 flex items-center justify-between font-mono text-[10px] uppercase tracking-widest2 text-white/70">
-          <span>{Math.floor(progress)}:{String(Math.floor((progress % 1) * 60)).padStart(2, '0')}</span>
-          <span>03:47</span>
-        </div>
-        <div className="group relative h-1 w-full cursor-pointer bg-white/20" onClick={onProgress}>
-          <div className="absolute inset-y-0 left-0 bg-amberglow" style={{ width: `${(progress / DURATION) * 100}%` }} />
-        </div>
-      </div>
-    </div>
-  )
-}
-
 export default function OutputPlayer({ jobOutput }) {
-  const [playing, setPlaying] = useState(false)
-  const [progress, setProgress] = useState(0)
   const [downloaded, setDownloaded] = useState(false)
   const [profile, setProfile] = useState(null)
   const visualizerRef = useRef(null)
@@ -104,18 +17,9 @@ export default function OutputPlayer({ jobOutput }) {
   const profileKeys = Object.keys(paths)
   const activeProfile = profile || jobOutput?.editor_output?.primary_profile || profileKeys[0] || null
   const videoSrc = isReal && jobOutput?.job_id ? videoUrl(jobOutput.job_id, activeProfile) : null
-
-  useEffect(() => {
-    if (!playing) return
-    const iv = setInterval(() => {
-      setProgress((p) => {
-        const next = p + 0.35
-        if (next >= DURATION) { setPlaying(false); return DURATION }
-        return next
-      })
-    }, 100)
-    return () => clearInterval(iv)
-  }, [playing])
+  // Attract mode: a real rendered demo asset, not a mock player — the fake
+  // canvas "output" is gone; the pipeline report below is live job data.
+  const demoSrc = '/output.mp4'
 
   const buildReportContent = () => {
     const userPrompt = jobOutput?.input_files?.user_prompt || ''
@@ -240,16 +144,13 @@ export default function OutputPlayer({ jobOutput }) {
               )}
             </div>
           ) : (
-            <MockVideo
-              playing={playing}
-              progress={progress}
-              onToggle={() => setPlaying((p) => !p)}
-              onProgress={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect()
-                const ratio = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1)
-                setProgress(ratio * DURATION)
-              }}
-            />
+            <div className="relative aspect-video w-full overflow-hidden bg-black">
+              <video src={demoSrc} autoPlay loop muted playsInline preload="auto" className="h-full w-full object-cover" />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40" />
+              <div className="absolute bottom-4 left-5 font-mono text-[10px] uppercase tracking-widest2 text-white/70">
+                {jobOutput?.status ? `${String(jobOutput.status).toLowerCase()}` : 'demo · render output'}
+              </div>
+            </div>
           )}
 
           <div className="flex flex-col gap-5 p-6 sm:flex-row sm:items-center sm:justify-between">
@@ -261,7 +162,7 @@ export default function OutputPlayer({ jobOutput }) {
               </div>
               <div>
                 <p className="font-mono text-[11px] uppercase tracking-widest2 text-bone">
-                  {videoSrc ? `now playing · ${activeProfile}` : (playing ? 'now rendering acoustics' : 'documentary · 03:47')}
+                  {videoSrc ? `now playing · ${activeProfile}` : 'finished cut · rendered end to end'}
                 </p>
                 <p className="font-mono text-[9px] uppercase tracking-widest text-ash/40">voiceover · b-roll · archival grade</p>
               </div>

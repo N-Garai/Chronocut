@@ -3,7 +3,7 @@ from app.tools.llm.scorer import score_provider, provider_menu
 
 def test_score_shape():
     r = score_provider("write documentary script", 1000)
-    assert r["provider"] == "gemini-flash"
+    assert r["provider"] == "meta"
     assert "score" in r and "cost_cents" in r and "fallback" in r
     assert r["cost_cents"] == 0.0
 

@@ -1,4 +1,4 @@
-"""CapabilityDiscoveryAgent (M2) — advertises the live tool/provider registry.
+"""CapabilityDiscoveryAgent — advertises the live tool/provider registry.
 
 Thin agent: delegates to the runtime ToolRegistry so the orchestrator and UI
 can discover what the system can actually do. No model calls (free tier).

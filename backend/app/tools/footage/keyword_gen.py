@@ -4,7 +4,7 @@ The screenwriter sometimes echoes the whole prompt as a "visual", which makes a
 terrible Pexels/Pixabay query (it matches nothing useful or the same clip for
 every shot). This module produces short, concrete, *distinct* search phrases via
 an LLM, with a deterministic heuristic fallback so footage search always has good
-terms even when Gemini is unavailable.
+terms even when the provider is unavailable.
 """
 import logging
 import re
@@ -62,7 +62,7 @@ async def extract_search_keywords(
     if not prompt:
         return _expand(["nature"], max(1, n_segments))
     try:
-        from app.tools.llm.call import scored_gemini_json
+        from app.tools.llm.call import scored_llm_json
         system = (
             "You convert a creative brief into B-roll search keywords for stock "
             "video sites (Pexels, Pixabay). Return ONLY JSON: "
@@ -73,7 +73,7 @@ async def extract_search_keywords(
             "cover DIVERSE facets (different subjects/angles/times) so each shot "
             f"gets a DISTINCT clip; produce exactly {max(3, n_segments)} keywords."
         )
-        result = await scored_gemini_json(
+        result = await scored_llm_json(
             f"Creative brief: {prompt}\nProduce {max(3, n_segments)} distinct search keywords.",
             system=system, job_id=job_id, agent="footage", tool="keyword_gen",
             temperature=0.5, max_output_tokens=512,
