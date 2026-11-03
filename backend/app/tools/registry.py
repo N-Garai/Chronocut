@@ -73,7 +73,6 @@ class ToolRegistry:
         transcribe_providers = []
         if is_meta and provider_key:
             transcribe_providers.append("meta_asr")
-        transcribe_providers.append("whisper_local")
 
         vision_providers = ["meta_vision"] if is_meta and provider_key else []
 
@@ -96,7 +95,7 @@ class ToolRegistry:
                 "enabled": True,
                 "providers": transcribe_providers,
                 "model": settings.META_ASR_MODEL if is_meta else None,
-                "note": "Provider speech-to-text first, local Whisper last",
+                "note": "Meta speech-to-text (Muse Voice Transcribe)",
             },
             "image_tag": {
                 "enabled": True,
@@ -165,7 +164,7 @@ class ToolRegistry:
             },
             "reference": {
                 "enabled": settings.ENABLE_REFERENCE_VIDEO,
-                "providers": ["yt_dlp_fetch", "whisper_transcribe", "scene_detect", "keyframe_extract", "reference_analyze"],
+                "providers": ["yt_dlp_fetch", "meta_asr", "scene_detect", "keyframe_extract", "reference_analyze"],
             },
             "rag": {
                 "enabled": settings.ENABLE_RAG,

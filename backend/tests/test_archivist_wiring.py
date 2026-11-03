@@ -1,7 +1,7 @@
 """ARCHIVIST stage wiring: one ingestion path, provider layer only.
 
 The transcription and tagging workers must delegate to the provider chain
-(Meta first, local Whisper fallback) instead of vendor SDKs, and the
+(Meta models only) instead of vendor SDKs, and the
 orchestrator must go through the Archivist rather than a parallel path.
 """
 import asyncio
@@ -42,35 +42,44 @@ def test_audio_worker_never_raises_on_provider_failure(monkeypatch):
     assert out["full_text"] == "" and "meta asr down" in out["error"]
 
 
-def test_image_worker_delegates_to_provider_tagging(monkeypatch):
-    import app.tools.llm.call as call_pkg
+def test_image_worker_delegates_to_provider_tagging(monkeypatch, tmp_path):
+    # The tagger reads the file from disk before the provider call, and it
+    # binds `scored_llm_json` at import time — patch that module's name and
+    # pass a real readable file.
+    import app.agents.sub_agents.image_tagger as tagger_pkg
+    photo = tmp_path / "photo.png"
+    photo.write_bytes(b"\x89PNG fake image bytes")
     calls = []
 
     async def fake_tag_json(*_a, **kwargs):
         calls.append(kwargs)
         return {"description": "a courtyard in 1962", "objects": ["courtyard"]}
 
-    monkeypatch.setattr(call_pkg, "scored_llm_json", fake_tag_json)
-    out = asyncio.run(ImageTaggerSubAgent().tag_single(PHOTO, job_id="j-arch"))
+    monkeypatch.setattr(tagger_pkg, "scored_llm_json", fake_tag_json)
+    out = asyncio.run(ImageTaggerSubAgent().tag_single(str(photo), job_id="j-arch"))
     assert calls and calls[0].get("job_id") == "j-arch"
     assert any("media" in kw for kw in calls)
     assert out["description"].startswith("a courtyard")
 
 
-def test_image_worker_isolates_a_failing_file(monkeypatch):
-    import app.tools.llm.call as call_pkg
+def test_image_worker_isolates_a_failing_file(monkeypatch, tmp_path):
+    import app.agents.sub_agents.image_tagger as tagger_pkg
+    photo = tmp_path / "photo.png"
+    photo.write_bytes(b"\x89PNG fake image bytes")
 
     async def boom(*_a, **_kw):
         raise RuntimeError("vision 503")
 
-    monkeypatch.setattr(call_pkg, "scored_llm_json", boom)
-    out = asyncio.run(ImageTaggerSubAgent().tag_single(PHOTO))
-    assert out["filename"] == PHOTO and "vision 503" in out["error"]
+    monkeypatch.setattr(tagger_pkg, "scored_llm_json", boom)
+    out = asyncio.run(ImageTaggerSubAgent().tag_single(str(photo)))
+    assert out["filename"] == str(photo) and "vision 503" in out["error"]
 
 
-def test_archivist_combines_both_workers(monkeypatch):
+def test_archivist_combines_both_workers(monkeypatch, tmp_path):
     import app.tools.audio as audio_pkg
-    import app.tools.llm.call as call_pkg
+    import app.agents.sub_agents.image_tagger as tagger_pkg
+    photo = tmp_path / "photo.png"
+    photo.write_bytes(b"\x89PNG fake image bytes")
 
     async def fake_transcribe(path, language="en", job_id=None):
         return {"full_text": "the river was high", "segments": [{"start": 0, "end": 1, "text": "the river was high"}]}
@@ -79,12 +88,12 @@ def test_archivist_combines_both_workers(monkeypatch):
         return {"description": "river bank"}
 
     monkeypatch.setattr(audio_pkg, "provider_audio_transcribe", fake_transcribe)
-    monkeypatch.setattr(call_pkg, "scored_llm_json", fake_tag_json)
+    monkeypatch.setattr(tagger_pkg, "scored_llm_json", fake_tag_json)
     out = asyncio.run(ArchivistAgent().process(
-        {"audio_files": [AUDIO], "photo_files": [PHOTO]}, job_id="j-arch"))
+        {"audio_files": [AUDIO], "photo_files": [str(photo)]}, job_id="j-arch"))
     assert out["transcript"] == "the river was high"
     assert out["segments"] and out["segments"][0]["text"] == "the river was high"
-    assert out["image_tags"][PHOTO]["description"] == "river bank"
+    assert out["image_tags"][str(photo)]["description"] == "river bank"
     assert out["audio_files_processed"] == 1 and out["photo_files_processed"] == 1
 
 

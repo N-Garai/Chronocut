@@ -59,10 +59,13 @@ def test_understanding_keeps_frame_tags_when_summary_is_empty(monkeypatch):
     monkeypatch.setattr(ingest, "_extract_audio", lambda *_a, **_kw: False)
     monkeypatch.setattr(ingest, "_extract_frame", lambda *_a, **_kw: True)
 
-    async def fake_tag_json(*_a, **kwargs):
+    async def fake_tag_single(*_a, **_kw):
         return {"description": "a red doorway", "objects": ["door"], "mood": "calm"}
 
-    monkeypatch.setattr("app.tools.llm.call.scored_llm_json", fake_tag_json)
+    # The frame file is faked (no real JPEG on disk), so stub the tagger itself
+    # rather than its provider call.
+    monkeypatch.setattr("app.agents.sub_agents.image_tagger.ImageTaggerSubAgent.tag_single",
+                        fake_tag_single)
     out = asyncio.run(ingest.ingest_video_file("/media/clip.mp4", job_id="j-vid-3"))
     assert out["understanding"] == {}
     assert out["visual_description"] == "a red doorway"

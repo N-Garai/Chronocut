@@ -136,13 +136,14 @@ def test_scored_llm_call_records_a_call(monkeypatch):
     monkeypatch.setattr(type(settings), "provider_api_key", property(lambda s: "LLM_test"), raising=False)
     calls = []
 
-    async def fake_network(*_a, **kwargs):
-        calls.append(kwargs)
+    async def fake_network(provider_name, prompt, system=None, **kwargs):
+        calls.append({"provider": provider_name, "prompt": prompt})
         return 'from provider'
 
-    monkeypatch.setattr(call, '_meta_network_call', fake_network)
+    monkeypatch.setattr(call, '_provider_network_call', fake_network)
     out = asyncio.run(call.scored_llm_call(f'has-key-{__import__("uuid").uuid4().hex}', agent='t', tool='t'))
     assert out == 'from provider' and len(calls) == 1
+    assert calls[0]["provider"] == "meta"
 
 
 # ---------------------------------------------------------------- Meta ASR chunking

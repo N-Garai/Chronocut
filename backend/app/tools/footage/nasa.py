@@ -19,6 +19,7 @@ def search_nasa(query: str, limit: int = 3) -> list[dict]:
         return []
 
     results = []
+    manifest_failures = 0
     for item in items:
         if len(results) >= limit:
             break
@@ -29,11 +30,18 @@ def search_nasa(query: str, limit: int = 3) -> list[dict]:
         manifest_url = links[0].get("href")
         if not manifest_url:
             continue
+        # Fail fast: when the manifest endpoint is failing wholesale (empty
+        # bodies, blocked network) each retry costs the pipeline up to 20s per
+        # item. Two consecutive failures means the source is down for this
+        # query — bail out and let the resolver cascade try other sources.
+        if manifest_failures >= 2:
+            logger.warning("search_nasa manifest endpoint failing repeatedly; skipping remaining items")
+            break
         # Default thumbnail = the manifest link itself.
         thumb = meta.get("thumbnail") or manifest_url
         try:
             import requests
-            mresp = requests.get(manifest_url, timeout=20)
+            mresp = requests.get(manifest_url, timeout=10)
             mresp.raise_for_status()
             # The link is a JSON manifest of asset URLs.
             assets = mresp.json()
@@ -59,6 +67,7 @@ def search_nasa(query: str, limit: int = 3) -> list[dict]:
                 "source": "nasa",
             })
         except Exception as e:
+            manifest_failures += 1
             logger.warning(f"search_nasa asset manifest failed: {e}")
             continue
     return results

@@ -25,12 +25,18 @@ def _probe_duration(path: str) -> float:
             ],
             capture_output=True, text=True, timeout=30,
         )
-        if result.returncode != 0:
-            return 0.0
-        import json
-        data = json.loads(result.stdout)
-        d = float(data.get("format", {}).get("duration", 0.0) or 0.0)
-        return d
+        if result.returncode == 0:
+            import json
+            data = json.loads(result.stdout)
+            return float(data.get("format", {}).get("duration", 0.0) or 0.0)
+    except Exception:
+        pass
+    # Minimal installs ship only the ffmpeg binary — read the duration from
+    # its stderr instead of giving up (production has ffprobe).
+    try:
+        from app.tools.review.ffprobe import _ffmpeg_probe_fallback
+        info = _ffmpeg_probe_fallback(path)
+        return float(info["duration"]) if info else 0.0
     except Exception:
         return 0.0
 
@@ -234,10 +240,11 @@ def burn_drawtext_final(video_in: str, storyboard: List[Dict], profile, out_path
                 f"enable='between(t,{start:.2f},{end:.2f})'"
             )
         if not chain:
-            cmd = ["ffmpeg", "-y", "-threads", "1", "-preset", "ultrafast", "-i", video_in, "-c:v", "copy", "-an", out_path]
+            cmd = ["ffmpeg", "-y", "-threads", "1", "-i", video_in, "-c:v", "copy", "-an", out_path]
         else:
-            cmd = ["ffmpeg", "-y", "-threads", "1", "-preset", "ultrafast", "-i", video_in, "-vf", ",".join(chain),
-                   "-c:v", profile.codec, "-pix_fmt", "yuv420p", "-r", str(profile.fps), "-an", out_path]
+            cmd = ["ffmpeg", "-y", "-threads", "1", "-i", video_in, "-vf", ",".join(chain),
+                   "-c:v", profile.codec, "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                   "-r", str(profile.fps), "-an", out_path]
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         return res.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0
     except Exception as e:
@@ -263,7 +270,9 @@ def build_segment(
         vf, textfile = _build_vf(profile, is_image, effect, color_grade, motion, overlay_text, duration)
 
         def _run(vf_arg: Optional[str]) -> bool:
-            cmd = ["ffmpeg", "-y", "-threads", "1", "-preset", "ultrafast"]
+            # Encoder options (-preset) must sit on the OUTPUT side: ffmpeg >= 6.1
+            # hard-fails on codec options placed before -i ("not a decoding option").
+            cmd = ["ffmpeg", "-y", "-threads", "1"]
             if is_image:
                 cmd += ["-loop", "1"]
             else:
@@ -273,7 +282,7 @@ def build_segment(
             if vf_arg:
                 cmd += ["-vf", vf_arg]
             cmd += [
-                "-c:v", profile.codec, "-pix_fmt", "yuv420p",
+                "-c:v", profile.codec, "-preset", "ultrafast", "-pix_fmt", "yuv420p",
                 "-r", str(profile.fps), "-t", str(duration),
                 "-an", out_path,
             ]
@@ -320,8 +329,9 @@ def concatenate_with_transitions(
 
         if len(segments) == 1:
             cmd = [
-                "ffmpeg", "-y", "-threads", "1", "-preset", "ultrafast", "-i", segments[0],
-                "-map", "0", "-c:v", profile.codec, "-pix_fmt", "yuv420p",
+                "ffmpeg", "-y", "-threads", "1", "-i", segments[0],
+                "-map", "0", "-c:v", profile.codec, "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p",
                 "-r", str(profile.fps), "-b:v", profile.bitrate,
                 "-an", out_path,
             ]
@@ -357,13 +367,13 @@ def concatenate_with_transitions(
                 prev = out_label
             last = f"[v{len(segments) - 1}]"
 
-            cmd = ["ffmpeg", "-y", "-threads", "1", "-preset", "ultrafast"]
+            cmd = ["ffmpeg", "-y", "-threads", "1"]
             for s in segments:
                 cmd += ["-i", s]
             cmd += [
                 "-filter_complex", ";".join(filter_parts),
                 "-map", last, "-an",
-                "-c:v", profile.codec, "-pix_fmt", "yuv420p",
+                "-c:v", profile.codec, "-preset", "ultrafast", "-pix_fmt", "yuv420p",
                 "-r", str(profile.fps), "-b:v", profile.bitrate,
                 "-t", str(total), out_path,
             ]
@@ -381,8 +391,8 @@ def concatenate_with_transitions(
             for s in segments:
                 f.write(f"file '{os.path.abspath(s)}'\n")
         fb = [
-            "ffmpeg", "-y", "-threads", "1", "-preset", "ultrafast", "-f", "concat", "-safe", "0", "-i", list_path,
-            "-c:v", profile.codec, "-pix_fmt", "yuv420p", "-an", out_path,
+            "ffmpeg", "-y", "-threads", "1", "-f", "concat", "-safe", "0", "-i", list_path,
+            "-c:v", profile.codec, "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-an", out_path,
         ]
         res2 = subprocess.run(fb, capture_output=True, text=True, timeout=900)
         return res2.returncode == 0 and os.path.exists(out_path)
@@ -446,7 +456,7 @@ def mix_audio(
             parts.append(f"[pre]apad,aresample=44100,loudnorm=I=-18:TP=-1.5:LRA=11,atrim=0:{pad_dur:.2f}[out]")
 
         filter_complex = ";".join(parts)
-        cmd = ["ffmpeg", "-y", "-threads", "1", "-preset", "ultrafast"] + inputs + [
+        cmd = ["ffmpeg", "-y", "-threads", "1"] + inputs + [
             "-filter_complex", filter_complex,
             "-map", "[out]", "-c:a", "aac", "-b:a", "192k",
             "-t", f"{pad_dur:.2f}", out_audio,

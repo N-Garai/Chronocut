@@ -292,7 +292,9 @@ def build_edl_segment(
         )
 
         def _run(vf_arg: Optional[str], timeout_: int) -> bool:
-            cmd = ["ffmpeg", "-y", "-threads", "1", "-preset", "ultrafast"]
+            # Encoder options (-preset) must sit on the OUTPUT side: ffmpeg >= 6.1
+            # hard-fails on codec options placed before -i.
+            cmd = ["ffmpeg", "-y", "-threads", "1"]
             if clip_in > 0.01:
                 cmd += ["-ss", f"{clip_in:.3f}"]
             if is_image:
@@ -307,7 +309,7 @@ def build_edl_segment(
             if vf_arg:
                 cmd += ["-vf", vf_arg]
             cmd += [
-                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
                 "-r", str(fps), "-an", out_path,
             ]
             ok, _ = run_ffmpeg(cmd, timeout=timeout_)
@@ -407,8 +409,9 @@ def concatenate_edl_timeline(
         if not contiguous:
             return False
         if len(contiguous) == 1:
-            cmd = ["ffmpeg", "-y", "-threads", "1", "-preset", "ultrafast", "-i", contiguous[0][2],
-                   "-map", "0", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            cmd = ["ffmpeg", "-y", "-threads", "1", "-i", contiguous[0][2],
+                   "-map", "0", "-c:v", "libx264", "-preset", "ultrafast",
+                   "-pix_fmt", "yuv420p",
                    "-r", str(fps), "-an",
                    "-t", f"{max(total, contiguous[0][1]):.3f}", out_path]
             ok, _ = run_ffmpeg(cmd, timeout=timeout)
@@ -427,29 +430,38 @@ def concatenate_edl_timeline(
             junc_infos.append((at, xf or ("fade", 0.0)))
 
         has_real_transitions = any(d > 0.01 for _, (t, d) in junc_infos) if junc_infos else False
-        durations = [e - s for (s, e, _) in contiguous]
         if has_real_transitions:
-            filter_parts: List[str] = []
-            prev = "[0:v]"
-            offset = 0.0
-            for i, (nature, (ttype, tlen)) in enumerate(junc_infos):
-                xoff = max(0.0, offset + durations[i] - tlen)
-                label = f"[v{i + 1}]"
-                filter_parts.append(
-                    f"{prev}[{i + 1}:v]xfade=transition={ttype}:duration={tlen:.3f}:offset={xoff:.3f}{label}")
-                prev = label
-                offset = xoff + tlen
-            last = f"[v{len(junc_infos)}]"
-            cmd = ["ffmpeg", "-y", "-threads", "1", "-preset", "ultrafast"]
+            # Chained xfade cannot express this timeline: xfade overlaps its
+            # inputs, compressing the output and desyncing captions/audio that
+            # are keyed to absolute EDL times — and a zero-length "cut"
+            # junction lands its offset exactly at the previous input's EOF,
+            # silently ending the render early. Instead, composite every
+            # segment onto a black canvas at its absolute start; real
+            # junctions fade the incoming segment in over the picture below.
+            parts: List[str] = [
+                f"color=black:size={profile_w}x{profile_h}:rate={fps}:duration={total:.3f}[base]"]
+            prev_label = "[base]"
+            for i, (s, e, p) in enumerate(contiguous):
+                _, tlen = junc_infos[i - 1][1] if i > 0 else ("fade", 0.0)
+                chain = f"[{i}:v]setpts=PTS-STARTPTS+{s:.3f}/TB,format=rgba"
+                if tlen > 0.01:
+                    chain += f",fade=in:st={s:.3f}:d={tlen:.3f}:alpha=1"
+                parts.append(f"{chain}[fi{i}]")
+                out_label = f"[cmp{i}]"
+                parts.append(f"{prev_label}[fi{i}]overlay=eof_action=pass{out_label}")
+                prev_label = out_label
+            parts.append(f"{prev_label}format=yuv420p[out]")
+            cmd = ["ffmpeg", "-y", "-threads", "1"]
             for (_, _, p) in contiguous:
                 cmd += ["-i", p]
-            cmd += ["-filter_complex", ";".join(filter_parts), "-map", last, "-an",
-                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(fps),
-                    "-t", f"{max(total, offset):.3f}", out_path]
+            cmd += ["-filter_complex", ";".join(parts), "-map", "[out]", "-an",
+                    "-c:v", "libx264", "-preset", "ultrafast",
+                    "-r", str(fps),
+                    "-t", f"{total:.3f}", out_path]
             ok, _ = run_ffmpeg(cmd, timeout=timeout)
             if ok and valid_media(out_path):
                 return True
-            logger.warning("xfade concat failed; falling back to concat demuxer")
+            logger.warning("composite concat failed; falling back to concat demuxer")
 
         # concat demuxer fallback: hard cuts, minimal RAM
         list_path = out_path + ".concat.txt"
@@ -457,7 +469,7 @@ def concatenate_edl_timeline(
             for (_, _, p) in contiguous:
                 f.write(f"file '{os.path.abspath(p)}'\n")
         cmd = ["ffmpeg", "-y", "-threads", "1", "-f", "concat", "-safe", "0", "-i", list_path,
-               "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(fps), "-an", out_path]
+               "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-r", str(fps), "-an", out_path]
         ok, _ = run_ffmpeg(cmd, timeout=timeout)
         return ok and valid_media(out_path)
     except Exception as e:
@@ -520,8 +532,9 @@ def burn_ass_captions(video_in: str, ass_path: str, out_path: str, timeout: int 
         return False
     try:
         escaped = ass_path.replace("\\", "/").replace(":", "\\:")
-        cmd = ["ffmpeg", "-y", "-threads", "1", "-preset", "ultrafast", "-i", video_in,
-               "-vf", f"subtitles={escaped}", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        cmd = ["ffmpeg", "-y", "-threads", "1", "-i", video_in,
+               "-vf", f"subtitles={escaped}", "-c:v", "libx264", "-preset", "ultrafast",
+               "-pix_fmt", "yuv420p",
                "-an", out_path]
         ok, _ = run_ffmpeg(cmd, timeout=timeout)
         return ok and valid_media(out_path)
@@ -784,7 +797,7 @@ async def render_edl(
     if not ok:
         report["error"] = "timeline assembly failed"
         return report
-    report["total_footage"] = round(sum(e - s for (s, _, _) in segments), 3)
+    report["total_footage"] = round(sum(end - s for (s, end, _) in segments), 3)
 
     # 5) captions
     caption_track = tracks.get(TRACK_CAPTION) or {"clips": []}
@@ -818,12 +831,12 @@ async def render_edl(
     # 7) mux
     emit(85, "Muxing output")
     final = out_path
-    cmd = ["ffmpeg", "-y", "-threads", "1", "-preset", "ultrafast", "-i", current_video]
+    cmd = ["ffmpeg", "-y", "-threads", "1", "-i", current_video]
     if audio_ok:
         cmd += ["-i", audio_path, "-c:v", "libx264"]
     else:
         cmd += ["-c:v", "libx264"]
-    cmd += ["-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+    cmd += ["-preset", "ultrafast", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
     if audio_ok:
         cmd += ["-c:a", "aac", "-b:a", "192k", "-shortest"]
     else:

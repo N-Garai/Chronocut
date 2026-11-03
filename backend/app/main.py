@@ -13,7 +13,7 @@ from typing import Optional, Dict, Any, List
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse, Response
+from fastapi.responses import JSONResponse, StreamingResponse, Response, RedirectResponse
 
 from app.config import settings
 from app.agents.orchestrator import LeadOrchestratorAgent
@@ -546,19 +546,28 @@ async def get_video(job_id: str, profile: Optional[str] = None, request: Request
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     editor = job.get("editor_output", {})
-    paths = editor.get("video_paths", {})
-    if not paths:
+    paths = editor.get("video_paths", {}) or {}
+    urls = editor.get("video_urls", {}) or {}
+    if not paths and not urls:
         raise HTTPException(status_code=404, detail="No video available yet")
-    key = profile or editor.get("primary_profile") or next(iter(paths))
-    path = paths.get(key) or next(iter(paths.values()))
-    if not path or not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Video file not found yet")
-    if not os.path.getsize(path):
+    key = profile or editor.get("primary_profile") or next(iter(paths or urls))
+    path = paths.get(key) or next(iter(paths.values()), None)
+    url = urls.get(key) or next(iter(urls.values()), None)
+    # Serve the local file when it is healthy; otherwise redirect to the
+    # object-storage copy so artifacts survive instance restarts (Render's
+    # /tmp is wiped on every deploy). CORS itself is handled by middleware.
+    if path and os.path.exists(path) and os.path.getsize(path) > 0:
+        headers = {}
+        if download:
+            headers["Content-Disposition"] = f'attachment; filename="{job_id}.mp4"'
+        return _serve_file_range(request, path, media_type="video/mp4", headers=headers)
+    if url:
+        return RedirectResponse(url, status_code=307)
+    if path and os.path.exists(path):
         raise HTTPException(status_code=404, detail="Video file is empty")
-    headers = {}
-    if download:
-        headers["Content-Disposition"] = f'attachment; filename="{job_id}.mp4"'
-    return _serve_file_range(request, path, media_type="video/mp4", headers=headers)
+    if path:
+        raise HTTPException(status_code=404, detail="Video file not found yet")
+    raise HTTPException(status_code=404, detail="No video available yet")
 
 
 @app.get("/api/v1/jobs/{job_id}/assets")
@@ -638,15 +647,21 @@ async def get_ledger(job_id: str):
     ledger = JobStateService.get_ledger(job_id)
     job = JobStateService.get_job(job_id) or {}
     total = sum((c.get("cost_cents", 0.0) for c in ledger if not c.get("cached")))
-    # Serialize datetime-like objects (Firestore returns DatetimeWithNanoseconds)
+
     def _jsonify(v):
         import datetime
         if isinstance(v, datetime.datetime):
             return v.isoformat()
         if hasattr(v, "isoformat"):
             return v.isoformat()
+        if isinstance(v, dict):
+            return {str(k): _jsonify(v) for k, v in v.items()}
+        if isinstance(v, list):
+            return [_jsonify(i) for i in v]
         return v
-    return JSONResponse({"job_id": job_id, "calls": ledger, "total_cost_cents": round(total, 4),
+
+    clean_ledger = [_jsonify(c) for c in ledger]
+    return JSONResponse({"job_id": job_id, "calls": clean_ledger, "total_cost_cents": round(total, 4),
                          "per_job_cap_cents": settings.PER_JOB_COST_CAP_CENTS})
 
 

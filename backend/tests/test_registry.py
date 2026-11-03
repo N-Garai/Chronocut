@@ -27,11 +27,10 @@ def test_envelope_reports_the_declared_modalities():
     env = registry.support_envelope()
     providers = env["audio_transcribe"]["providers"]
     if provider_is_meta_with_key():
-        assert providers[0] == "meta_asr"
+        assert providers == ["meta_asr"]
     else:
-        assert "meta_asr" not in providers
-    # Provider speech-to-text first, local Whisper last
-    assert "whisper_local" in providers
+        assert providers == []
+    # Only Meta models may be called at runtime — no local fallback ASR.
     assert env["video_understanding"]["enabled"] == bool(
         settings.LLM_PROVIDER == "meta" and settings.provider_api_key)
     assert env["image_gen"]["enabled"] == (settings.image_gen_provider != "off")

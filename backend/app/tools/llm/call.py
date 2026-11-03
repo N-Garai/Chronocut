@@ -257,7 +257,7 @@ async def scored_llm_call(
                     fb, prompt, system,
                     agent=agent, tool=tool, temperature=temperature,
                     max_output_tokens=max_output_tokens, media=None,
-                    json_mode=False, provider_name=fb,
+                    json_mode=False,
                 )
                 used_provider, used_model = fb, fb_model
                 break

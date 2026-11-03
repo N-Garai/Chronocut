@@ -58,8 +58,8 @@ def edl_to_otio(edl: Dict[str, Any]):
     """Return an OTIO Timeline for the EDL, or ``None`` when OTIO is missing.
 
     Video-track clips carry their grade/motion/transition/effects/transform
-    inside ``metadata['chronocut']`` so a round-trip into Resolve/Premiere
-    preserves the agent's intent as data.
+    inside ``metadata['chronocut']`` so a round-trip into professional
+    editors preserves the agent's intent as data.
     """
     if not OTIO_AVAILABLE:
         return None

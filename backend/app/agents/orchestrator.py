@@ -441,6 +441,7 @@ class LeadOrchestratorAgent:
                 logger.error(f"TTS failed: {e}")
 
             video_paths: Dict[str, str] = {}
+            video_urls: Dict[str, str] = {}
             if _cancelled(job_id):
                 _emit(job_id, "editor", 92, "Job cancelled before render.")
             else:
@@ -490,23 +491,45 @@ class LeadOrchestratorAgent:
                         narration_dir=narration_dir, profiles=profiles, job_id=job_id,
                         title=user_prompt,
                     )
+                    # A 0-byte/missing file must never be reported as delivered.
+                    video_paths = {k: v for k, v in video_paths.items()
+                                   if v and os.path.exists(v) and os.path.getsize(v) > 0}
                     _emit(job_id, "editor", 92, f"Rendered {len(video_paths)} format profile(s).")
                 except Exception as e:
                     logger.error(f"Render failed: {e}")
                     _emit(job_id, "editor", 92, f"Render failed: {e}")
         else:
-            # Editor stage already completed — recover outputs directly.
+            # Editor stage already completed — recover outputs directly. Files on
+            # the ephemeral disk may be gone after a restart; entries backed by a
+            # persisted object-storage URL stay servable.
             saved_editor = existing_job.get("editor_output", {}) or {}
-            video_paths = saved_editor.get("video_paths", {}) or {}
+            saved_urls = saved_editor.get("video_urls", {}) or {}
+            video_paths = {k: v for k, v in (saved_editor.get("video_paths", {}) or {}).items()
+                           if (v and os.path.exists(v) and os.path.getsize(v) > 0) or saved_urls.get(k)}
+            video_urls = dict(saved_urls)
             _emit(job_id, "editor", 92, f"Editor output recovered from cache ({len(video_paths)} profile(s)).")
 
         if not video_paths:
             JobStateService.update_job(job_id, {
                 "status": "FAILED",
-                "error_log": {"stage": "editor", "message": "No video produced"},
+                "error_log": {"stage": "editor",
+                              "message": "Render produced no playable video file (all outputs missing or empty)."},
             })
-            _emit(job_id, "done", 100, "Job failed: no video produced.", status="FAILED")
+            _emit(job_id, "done", 100, "Job failed: render produced no playable video.", status="FAILED")
             return {"job_id": job_id, "status": "FAILED"}
+
+        # Persist new artifacts off the ephemeral disk when object storage is
+        # configured, so delivered videos survive instance restarts/redeploys.
+        try:
+            from app.workers.render_worker import upload_artifact
+            for _pname, _p in video_paths.items():
+                if video_urls.get(_pname):
+                    continue
+                _url = upload_artifact(_p, job_id, "inproc")
+                if _url:
+                    video_urls[_pname] = _url
+        except Exception as _ue:
+            logger.warning("artifact upload skipped: %s", _ue)
 
         # Post-render memory hygiene — delete narration dir and render tmp
         # to free RAM/disk before the self-review + RAG stages run.
@@ -605,8 +628,9 @@ class LeadOrchestratorAgent:
 
         editor_output = {
             "video_paths": video_paths,
+            "video_urls": video_urls,
             "primary_profile": primary_profile,
-            "output_video_url": primary_path,
+            "output_video_url": video_urls.get(primary_profile) or primary_path,
             "changelog": {
                 "shots_rendered": len(storyboard),
                 "requested_length_seconds": requested_length,
@@ -632,7 +656,7 @@ class LeadOrchestratorAgent:
             "review_report": review_report,
         })
         _emit(job_id, "done", 100, "Production complete.", status=final_status,
-              video_url=primary_path, profiles=list(video_paths.keys()))
+              video_url=video_urls.get(primary_profile) or primary_path, profiles=list(video_paths.keys()))
         return {"job_id": job_id, "status": final_status, "video_paths": video_paths}
 
 

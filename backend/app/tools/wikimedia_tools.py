@@ -8,6 +8,11 @@ logger = logging.getLogger("chronocut.tools.wikimedia")
 
 WIKIMEDIA_API_BASE = "https://commons.wikimedia.org/w/api.php"
 
+# Wikimedia's User-Agent policy blocks anonymous/default library agents (403).
+_HEADERS = {
+    "User-Agent": "ChronoCut/1.0 (documentary video renderer; +https://chronocut.pages.dev)",
+}
+
 
 def search_images(query: str, limit: int = 10) -> List[Dict[str, Any]]:
     params = {
@@ -20,12 +25,13 @@ def search_images(query: str, limit: int = 10) -> List[Dict[str, Any]]:
         "iiurlwidth": "1280",
         "generator": "search",
         "gsrsearch": f"filetype:bitmap {query}",
+        "gsrnamespace": 6,  # File namespace — the default (0) finds no media files
         "gsrlimit": min(limit, 50),
         "gsroffset": 0,
     }
 
     try:
-        resp = requests.get(WIKIMEDIA_API_BASE, params=params, timeout=20)
+        resp = requests.get(WIKIMEDIA_API_BASE, params=params, timeout=20, headers=_HEADERS)
         resp.raise_for_status()
         data = resp.json()
         pages = data.get("query", {}).get("pages", {})
@@ -67,7 +73,7 @@ def get_image_url(file_title: str, width: int = 1280) -> Optional[str]:
     }
 
     try:
-        resp = requests.get(WIKIMEDIA_API_BASE, params=params, timeout=15)
+        resp = requests.get(WIKIMEDIA_API_BASE, params=params, timeout=15, headers=_HEADERS)
         resp.raise_for_status()
         data = resp.json()
         pages = data.get("query", {}).get("pages", {})

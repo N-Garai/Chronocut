@@ -39,13 +39,16 @@ def test_build_spec_has_intro_lower_outro():
     assert abs(lowers[1]["start"] - 5.0) < 1e-6
 
 
-def test_build_spec_karaoke_words_loaded(tmp_path):
+def test_build_spec_lower_thirds_use_whole_phrase_timing(tmp_path):
+    """MMS-TTS narration has no word-boundary timings, so captions are whole
+    phrases: no per-word karaoke data and the clip spans the shot duration."""
     import json
     wj = tmp_path / "1.mp3.words.json"
     json.dump({"text": "x", "words": [{"word": "rain", "start": 0.1, "end": 0.4}]}, open(wj, "w"))
     spec = hf.build_spec(_sb(), str(tmp_path), 15.0, title="T")
     low = next(s for s in spec if s["kind"] == "lower" and s["start"] == 0.0)
-    assert low["words"] and low["words"][0]["word"] == "rain"
+    assert "words" not in low
+    assert abs(low["end"] - 5.0) < 1e-6
 
 
 def test_write_composition_emits_css_and_no_external_lib(tmp_path):
@@ -53,10 +56,11 @@ def test_write_composition_emits_css_and_no_external_lib(tmp_path):
     p = str(tmp_path / "index.html")
     assert hf.write_composition(spec, 1280, 720, 30, p) is True
     body = open(p, encoding="utf-8").read()
-    # No external CDN (offline-safe) and karaoke highlight keyframes present.
+    # No external CDN (offline-safe) and the phrase/kinetic keyframes present.
     assert "gsap" not in body.lower()
     assert "cdn" not in body.lower()
-    assert "wOn" in body and "wOff" in body
+    assert "inUp" in body and "outUp" in body
+    assert "kIn" in body and "kOut" in body
     assert "Created with ChronoCut" in body
 
 

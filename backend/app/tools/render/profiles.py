@@ -33,15 +33,25 @@ class RenderProfile:
 
 
 def _clamp_resolution(width: int, height: int) -> tuple:
-    """Respect settings.MAX_RENDER_RESOLUTION; scale down proportionally if needed."""
+    """Respect settings.MAX_RENDER_RESOLUTION; scale down proportionally if needed.
+
+    Always returns even dimensions: yuv420p/H.264 encoders reject odd widths or
+    heights ("height not divisible by 2"), and a proportional clamp of 16:9
+    sources (1280x720 -> 720x405) otherwise yields an odd side.
+    """
+
+    def _even(v: int) -> int:
+        v = int(v)
+        return max(2, v - (v % 2))
+
     max_dim = int(getattr(settings, "MAX_RENDER_RESOLUTION", 0) or 0)
     if max_dim <= 0:
-        return width, height
+        return _even(width), _even(height)
     longest = max(width, height)
     if longest <= max_dim:
-        return width, height
+        return _even(width), _even(height)
     scale = max_dim / float(longest)
-    return int(round(width * scale)), int(round(height * scale))
+    return _even(round(width * scale)), _even(round(height * scale))
 
 
 def _make(name, width, height, fps, bitrate, audio_bitrate="192k", codec="libx264",

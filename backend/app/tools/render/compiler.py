@@ -85,6 +85,38 @@ def _valid_video(p: Optional[str]) -> bool:
     return bool(p) and os.path.exists(p) and os.path.getsize(p) > 0
 
 
+def _decodable_video(p: Optional[str]) -> bool:
+    """True when the file actually contains a playable video stream.
+
+    Size > 0 is not enough: a mux with a broken/empty audio input under
+    ``-shortest`` exits 0 and writes a container with no decodable streams,
+    which then 404s at serve time and reports duration=0 in review. When
+    ffprobe itself is unavailable we fall back to the size check so a good
+    file is never rejected for a missing tool.
+    """
+    if not _valid_video(p):
+        return False
+    try:
+        import json as _json
+        res = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json",
+             "-show_format", "-show_streams", p],
+            capture_output=True, text=True, timeout=30,
+        )
+        if res.returncode != 0:
+            return True
+        data = _json.loads(res.stdout or "{}") or {}
+        streams = data.get("streams") or []
+        has_video = any(s.get("codec_type") == "video" for s in streams)
+        try:
+            dur = float((data.get("format") or {}).get("duration", 0) or 0)
+        except (TypeError, ValueError):
+            dur = 0.0
+        return has_video and dur >= 0.5
+    except Exception:
+        return True
+
+
 def _create_matte(out_path: str, profile, duration: float = 5.0) -> str:
     """Reliably produce a solid-color placeholder clip.
 
@@ -219,7 +251,7 @@ async def render_job(
             if not segments:
                 logger.warning(f"profile {pname}: no segments built, using matte")
                 _create_matte(out_path, profile, 5.0)
-                result[pname] = out_path if os.path.exists(out_path) else ""
+                result[pname] = out_path if _valid_video(out_path) else ""
                 continue
 
             _emit(job_id, 30 + pi * 10, f"Assembling video for {pname}")
@@ -234,12 +266,12 @@ async def render_job(
                     )
                     if not fallback:
                         _create_matte(out_path, profile, 5.0)
-                        result[pname] = out_path if os.path.exists(out_path) else ""
+                        result[pname] = out_path if _valid_video(out_path) else ""
                         continue
                 else:
                     logger.warning(f"profile {pname}: ffmpeg concat failed; MoviePy fallback disabled")
                     _create_matte(out_path, profile, 5.0)
-                    result[pname] = out_path if os.path.exists(out_path) else ""
+                    result[pname] = out_path if _valid_video(out_path) else ""
                     continue
             _emit(job_id, 40 + pi * 10, f"Concat complete for {pname}")
 
@@ -313,34 +345,36 @@ async def render_job(
             # Mux.
             if audio_ok and _valid_video(final_audio) and _valid_video(raw_video):
                 cmd = [
-                    "ffmpeg", "-y", "-threads", "1", "-preset", "ultrafast",
+                    "ffmpeg", "-y", "-threads", "1",
                     "-i", raw_video, "-i", final_audio,
                     "-c:v", "copy", "-c:a", "aac", "-shortest", out_path,
                 ]
                 res = await asyncio.to_thread(
                     lambda: subprocess.run(cmd, capture_output=True, text=True, timeout=600)
                 )
-                if res.returncode != 0 or not _valid_video(out_path):
+                # -shortest collapses the output to ~0s when the audio input is
+                # broken/empty (exit 0, streamless file) — verify decodability.
+                if res.returncode != 0 or not _decodable_video(out_path):
                     out_path = raw_video
             else:
                 out_path = raw_video
 
             _emit(job_id, 90 + pi * 10, f"Muxed final output for {pname}")
 
-            if _valid_video(out_path):
+            if _decodable_video(out_path):
                 result[pname] = out_path
-            elif _valid_video(raw_video):
+            elif out_path != raw_video and _decodable_video(raw_video):
                 result[pname] = raw_video
             else:
                 _create_matte(out_path, profile, 5.0)
-                result[pname] = out_path if _valid_video(out_path) else ""
+                result[pname] = out_path if _decodable_video(out_path) else ""
 
             _emit(job_id, 100, f"Rendered {pname}")
         except Exception as e:
             logger.error(f"render_job profile {pname} failed: {e}")
             try:
                 _create_matte(out_path, profile, 5.0)
-                if os.path.exists(out_path):
+                if _decodable_video(out_path):
                     result[pname] = out_path
             except Exception:
                 pass

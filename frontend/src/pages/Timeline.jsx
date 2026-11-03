@@ -24,7 +24,7 @@ const TERMINAL_OK = ['COMPLETE', 'NEEDS_REVIEW']
 /**
  * TimelineStudio — the `/studio/:jobId/timeline` workspace.
  *
- * Professional video editing layout modeled after Clipchamp/CapCut:
+ * Professional video editing layout:
  *
  *   Left:   Asset bin (media upload + existing assets)
  *   Center: Video preview (top) + Timeline with tracks (bottom)
@@ -53,7 +53,7 @@ export default function TimelineStudio() {
   const [panelCollapsed, setPanelCollapsed] = useState(() => window.innerWidth < 1280)
   const [compact, setCompact] = useState(() => window.innerWidth < 1024)
   const [textEditorOpen, setTextEditorOpen] = useState(false)
-  const [editingClipId, setEditingClipId] = useState<string | null>(null)
+  const [editingClipId, setEditingClipId] = useState(null)
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 1023px)')

@@ -14,8 +14,7 @@ from app.utils.rate_limiter import with_rate_limit
 class AudioTranscriberSubAgent:
     """ARCHIVIST audio worker: transcription through the provider chain.
 
-    Delegates to ``provider_audio_transcribe`` so the provider layer decides
-    (Meta chunked ASR -> local Whisper); this worker
+    Delegates to ``provider_audio_transcribe`` (Meta chunked ASR); this worker
     never talks to a vendor SDK directly.
     """
 

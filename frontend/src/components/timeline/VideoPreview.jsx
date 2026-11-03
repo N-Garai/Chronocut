@@ -3,8 +3,8 @@ import { Play, Pause, Volume2, VolumeOff, Maximize, Minimize, SkipBack, SkipForw
 
 /**
  * VideoPreview — professional video preview pane with playback controls.
- * Mirrors Clipchamp/CapCut style preview: video fills the pane, transport
- * controls float at bottom-center, scrubber shows playhead position.
+ * Video fills the pane, transport controls float at bottom-center, and the
+ * scrubber shows playhead position.
  *
  * Accepts a video URL (from /api/v1/jobs/:id/video?profile=...) and mirrors
  * the timeline playhead so scrubbing the timeline updates the preview and
@@ -108,37 +108,29 @@ export default function VideoPreview({
         onClick={handlePlayPause}
         style={{ pointerEvents: error ? 'none' : 'auto' }}
       />
-      {/* Error overlay */}
-      {error && !loaded && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80">
-          <div className="flex flex-col items-center gap-3">
-            <div className="w-16 h-16 rounded-full border-4 border-white/20 border-t-cyanglow animate-spin">
-              <div className="w-full h-full border-t-cyanglow" />
-            </div>
-            <p className="text-white text-sm font-mono">Loading video…</p>
-          </div>
+      {/* Empty state — no render available yet */}
+      {!src && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/80">
+          <div className="h-14 w-14 rounded-full border-2 border-dashed border-cyanglow/40" />
+          <p className="text-sm font-mono text-white/80">No video available yet</p>
+          <p className="text-xs text-white/40">Render will appear here once processing completes</p>
         </div>
       )}
-      {/* Error state */}
-      {error && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80">
-          <div className="flex flex-col items-center gap-2">
-            <div className="w-16 h-16 rounded-full border-4 border-red-500/50 border-t-red-500 animate-spin">
-              <div className="w-full h-full border-t-red-500" />
-            </div>
-            <p className="text-red-400 text-sm font-mono">Unable to load video</p>
-            <button
-              onClick={() => {
-                setError(false)
-                setPlaying(false)
-                if (videoRef.current) videoRef.current.src = src
-                videoRef.current?.load()
-              }}
-              className="px-4 py-1 bg-red-500/20 text-red-400 border border-red-500/50 rounded hover:bg-red-500/40"
-            >
-              Retry
-            </button>
-          </div>
+      {/* Error state — src set but the video failed to load */}
+      {src && error && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80">
+          <p className="font-mono text-sm text-red-400">Unable to load video</p>
+          <button
+            onClick={() => {
+              setError(false)
+              setPlaying(false)
+              if (videoRef.current) videoRef.current.src = src
+              videoRef.current?.load()
+            }}
+            className="rounded border border-red-500/50 bg-red-500/20 px-4 py-1 text-red-400 hover:bg-red-500/40"
+          >
+            Retry
+          </button>
         </div>
       )}
       {/* Click-to-seek overlay */}

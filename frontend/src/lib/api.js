@@ -19,7 +19,14 @@ function buildForm({ file, mode, prompt, referenceUrl, targetLanguage, outputPro
 }
 
 async function request(path, init = undefined) {
-  const res = await fetch(`${API}${path}`, init)
+  // String bodies are JSON — declare it, or fetch defaults to text/plain and
+  // FastAPI rejects the payload (422). FormData must keep the browser-set
+  // multipart boundary header.
+  const headers = new Headers(init?.headers)
+  if (typeof init?.body === 'string' && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
+  const res = await fetch(`${API}${path}`, { ...init, headers })
   if (!res.ok) {
     let detail
     try { detail = (await res.json()).detail } catch { detail = null }
@@ -104,7 +111,10 @@ export function videoUrl(jobId, profile) {
 }
 
 export function renderedUrl(jobId, renderId) {
-  return `${API}/jobs/${jobId}/video?profile=${encodeURIComponent(renderId || 'youtube_landscape')}`
+  // A render id plays through the per-render endpoint; /video only resolves
+  // profile names, so ?profile=<render id> would silently serve the wrong cut.
+  if (!renderId) return videoUrl(jobId)
+  return `${API}/jobs/${jobId}/renders/${encodeURIComponent(renderId)}/video`
 }
 
 export function edlOtioUrl(jobId, revision) {

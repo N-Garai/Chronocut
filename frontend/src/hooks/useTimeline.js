@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { eventsUrl, getAgentActivity, getEdl, getRenders, postEdlOperations, putEdl, renderedUrl } from '../lib/api'
+import { eventsUrl, getAgentActivity, getEdl, getRenders, postEdlOperations, putEdl, renderedUrl, videoUrl } from '../lib/api'
 import { applyBatch } from '../timeline/commands'
 import { diffRevisions, allClipIds } from '../lib/edl'
 import { mergeRows } from '../timeline/agentTelemetry'
@@ -236,9 +236,16 @@ export function useTimeline(jobId) {
     try {
       const r = await getRenders(jobId)
       const list = r?.renders || []
-      if (!list.length) return
-      const doc = list[list.length - 1]
-      setRender({ ...doc, url: renderedUrl(jobId, doc.render_id) })
+      if (list.length) {
+        const doc = list[list.length - 1]
+        setRender({ ...doc, url: renderedUrl(jobId, doc.render_id) })
+        return
+      }
+      // No registered render doc — the in-process compile path serves the
+      // finished video straight from /video. A ranged GET probes existence
+      // cheaply (404 keeps the empty state; HEAD is 405 on FastAPI routes).
+      const res = await fetch(videoUrl(jobId), { headers: { Range: 'bytes=0-1' } })
+      if (res.ok || res.status === 206) setRender({ status: 'READY', revision: null, url: videoUrl(jobId) })
     } catch { /* none yet */ }
   }, [jobId])
 

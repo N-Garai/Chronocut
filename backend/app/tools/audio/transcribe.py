@@ -5,7 +5,7 @@ from typing import Optional, Dict, Any, List
 logger = logging.getLogger("chronocut.tools.audio")
 
 __all__ = [
-    "provider_audio_transcribe", "whisper_transcribe", "synthesize_speech",
+    "provider_audio_transcribe", "synthesize_speech",
     "get_duration",
 ]
 
@@ -29,12 +29,10 @@ def get_duration(file_path: str) -> float:
 
 
 async def provider_audio_transcribe(file_path: str, language: str = "en", job_id: Optional[str] = None) -> Dict[str, Any]:
-    """Provider-delegating transcription entrypoint.
-
-    Chain: Meta muse-voice-transcribe (multipart ASR, <=10 min windows with
-    overlap) -> local Whisper. Whichever path answers wins; the provider/model
-    metadata is returned with the transcript. ASR audio-seconds cost is recorded
-    in the ledger for the Meta path.
+    """Transcribe via Meta muse-voice-transcribe (multipart ASR, <=10 min windows
+    with overlap). ASR audio-seconds cost is recorded in the ledger for the Meta
+    path. When the Meta path is unavailable, returns an empty transcript so
+    callers degrade gracefully (captions-only pipeline).
     """
     from app.config import settings
 
@@ -64,36 +62,11 @@ async def provider_audio_transcribe(file_path: str, language: str = "en", job_id
                 return out
             raise ASRError("meta asr returned empty transcript")
         except Exception as e:
-            logger.warning("Meta ASR failed, falling back: %s", e)
+            logger.warning("Meta ASR failed: %s", e)
 
-    # Local Whisper (optional, no API cost).
-    res = whisper_transcribe(file_path, language=language, model=settings.WHISPER_MODEL)
-    if res.get("full_text"):
-        res.setdefault("provider", "whisper")
-        return res
     return {"full_text": "", "segments": [], "language": language,
             "duration_seconds": get_duration(file_path), "provider": "none",
-            "error": "all transcription providers failed"}
-
-
-def whisper_transcribe(file_path: str, language: str = "en", model: str = "base") -> Dict[str, Any]:
-    """Local Whisper transcription (optional, no API cost)."""
-    try:
-        import whisper
-    except ImportError:
-        logger.warning("whisper not installed; skipping local transcription")
-        return {"full_text": "", "segments": [], "language": language, "duration_seconds": 0}
-    try:
-        m = whisper.load_model(model)
-        res = m.transcribe(file_path, language=language)
-        segments = [{"start": s["start"], "end": s["end"], "text": s["text"].strip()}
-                    for s in res.get("segments", [])]
-        return {"full_text": res.get("text", ""), "segments": segments,
-                "language": res.get("language", language),
-                "duration_seconds": segments[-1]["end"] if segments else get_duration(file_path)}
-    except Exception as e:
-        logger.error(f"Whisper failed: {e}")
-        return {"full_text": "", "segments": [], "language": language, "duration_seconds": 0, "error": str(e)}
+            "error": "meta asr unavailable"}
 
 
 def _load_tts():

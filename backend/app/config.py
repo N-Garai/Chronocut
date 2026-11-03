@@ -125,7 +125,6 @@ class Settings(BaseSettings):
 
     PER_JOB_COST_CAP_CENTS: int = Field(default=50)
     LLM_CACHE_TTL_DAYS: int = Field(default=7)
-    WHISPER_MODEL: str = Field(default="base")
     DEFAULT_OUTPUT_PROFILES: str = Field(default="youtube_landscape")
 
     # ---- Paths (and no dead vars) ------------------------------------------

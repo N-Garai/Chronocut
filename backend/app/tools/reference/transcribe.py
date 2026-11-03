@@ -3,8 +3,6 @@ import os
 import subprocess
 import tempfile
 
-from app.config import settings
-
 logger = logging.getLogger("chronocut.tools.reference")
 
 
@@ -41,10 +39,10 @@ def _extract_audio(video_path: str, audio_path: str) -> bool:
 
 
 def transcribe(audio_path: str, language: str = "en") -> dict:
-    """Transcribe audio to text + segments.
+    """Transcribe audio to text + segments via Meta ASR.
 
-    Prefers local Whisper; falls back to provider transcription.
     Returns a dict with keys: full_text, segments, language, duration_seconds.
+    Degrades to an empty transcript when the Meta ASR path is unavailable.
     """
     result: dict = {"full_text": "", "segments": [], "language": language, "duration_seconds": 0.0}
 
@@ -53,26 +51,6 @@ def transcribe(audio_path: str, language: str = "en") -> dict:
     except Exception:
         pass
 
-    # --- Attempt Whisper ---------------------------------------------------
-    try:
-        import whisper  # lazy import
-
-        model = whisper.load_model(settings.WHISPER_MODEL)
-        wr = model.transcribe(audio_path, language=language if language != "en" else None)
-        segments = [
-            {"start": float(s.get("start", 0.0)), "end": float(s.get("end", 0.0)), "text": (s.get("text") or "").strip()}
-            for s in (wr.get("segments") or [])
-        ]
-        result["full_text"] = wr.get("text", "") or ""
-        result["segments"] = segments
-        result["language"] = wr.get("language", language)
-        return result
-    except ImportError:
-        logger.info("whisper not installed; falling back to provider transcription")
-    except Exception as e:
-        logger.warning(f"whisper transcription failed: {e}; falling back to provider transcription")
-
-    # --- Fallback: provider audio transcription --
     try:
         import asyncio as _aio
 
