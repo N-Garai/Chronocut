@@ -380,7 +380,16 @@ async def plan_from_message(
     normalized_ops: List[Dict[str, Any]] = []
     if ops:
         try:
-            normalized_ops, info = plan_operations(edl, ops)
+            # Build deterministic-plan context: silence ranges for remove_silence
+            ctx: Dict[str, Any] = {}
+            try:
+                from app.tools.audio.silence import audio_silence_context
+                ctx["silence_ranges"] = audio_silence_context(
+                    edl, revision=int(revision or 0),
+                    job_id=job_id)["silence_ranges"]
+            except Exception:
+                ctx["silence_ranges"] = []
+            normalized_ops, info = plan_operations(edl, ops, context=ctx)
             results = list(info.get("results") or [])
             fails = [r for r in results if not r.get("ok")]
             if plan_kind == "deterministic":
