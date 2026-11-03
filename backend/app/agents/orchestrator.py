@@ -100,11 +100,12 @@ class LeadOrchestratorAgent:
         requested_length = int(input_files.get("length_seconds") or 60)
 
         # Probe LLM availability. Every provider call already retries with
-        # backoff and fails over to deterministic templates, so a single transient
-        # 503 at startup must NOT disable LLM for the whole job. The API key (or
-        # a local open-weights endpoint via LLM_PROVIDER=local) is the source of
-        # truth; only go fully zero-LLM when neither is configured.
-        llm_available = bool(settings.provider_api_key) or (settings.LLM_PROVIDER or "").strip().lower() == "local"
+        # backoff and fails over through the provider chain to deterministic
+        # templates, so a single transient 503 at startup must NOT disable LLM
+        # for the whole job. The primary key OR any failover slot (Baseten,
+        # OpenRouter) OR a local open-weights endpoint is the source of
+        # truth; only go fully zero-LLM when none is configured.
+        llm_available = settings.llm_any_provider_ready
         try:
             from app.tools.llm.call import validate_model
             vm = await validate_model()

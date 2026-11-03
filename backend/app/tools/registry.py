@@ -128,7 +128,7 @@ class ToolRegistry:
             "image_gen": {
                 "enabled": image_gen,
                 "providers": [settings.image_gen_provider] if image_gen else [],
-                "model": "flux-1-schnell" if image_gen else None,
+                "model": settings.META_IMAGE_MODEL if image_gen else None,
                 "note": "Optional generated B-roll stills; degrades to stills/footage when off or out of quota",
             },
             "script": {

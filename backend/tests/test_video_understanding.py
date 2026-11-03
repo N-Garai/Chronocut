@@ -13,7 +13,7 @@ import app.tools.media.ingest_video as ingest
 
 class _Provider:
     name = "meta"
-    default_model = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    default_model = "muse-spark-1.3"
 
     def __init__(self, payload):
         self.payload = payload

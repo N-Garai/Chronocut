@@ -71,7 +71,7 @@ def _materialize_generated_now(job_id: str, snapshot: Dict[str, Any]) -> None:
     """
     try:
         from app.services.storage import asset_dir
-        from app.tools.imagegen.cfworkers import ensure_generated_assets
+        from app.tools.imagegen.muse import ensure_generated_assets
         copy = {**snapshot, "sources": [dict(s) for s in snapshot.get("sources") or []]}
         if not ensure_generated_assets(job_id, copy, asset_dir(str(job_id), "generated")):
             return

@@ -1,19 +1,19 @@
-"""Free-tier generated B-roll stills (Workers AI ``flux-1-schnell``)."""
+"""Generated B-roll stills (first-party Meta Image ``muse-image-1.0``)."""
 
-from app.tools.imagegen.cfworkers import (
-    cf_imagegen_available,
+from app.tools.imagegen.muse import (
     ensure_generated_assets,
-    estimate_neurons,
     generate_broll_stills,
     generate_still,
-    neuron_budget_status,
+    generated_source_id,
+    image_budget_status,
+    muse_imagegen_available,
 )
 
 __all__ = [
-    "cf_imagegen_available",
     "ensure_generated_assets",
-    "estimate_neurons",
     "generate_broll_stills",
     "generate_still",
-    "neuron_budget_status",
+    "generated_source_id",
+    "image_budget_status",
+    "muse_imagegen_available",
 ]

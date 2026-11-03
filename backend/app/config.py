@@ -2,6 +2,35 @@ from pydantic_settings import BaseSettings
 from pydantic import Field
 from typing import Optional, List, Tuple
 
+# (provider name -> text model / badge) resolution shared by settings,
+# the provider factory and the failover chain in ``tools/llm/call.py``.
+_TEXT_MODELS = {
+    "meta": None,          # resolved from META_TEXT_MODEL at call time
+    "baseten": "BASETEN_MODEL",
+    "openrouter": "OPENROUTER_TEXT_MODEL",
+    "local": "LOCAL_LLM_MODEL",
+}
+
+
+def text_model_for(provider_name: str) -> str:
+    """Default text model for a provider slot (empty string for ``meta`` — its
+    model id lives in ``META_TEXT_MODEL`` and is resolved by the caller)."""
+    field = _TEXT_MODELS.get((provider_name or "").strip().lower())
+    if field is None:
+        return ""
+    return field
+
+
+def llm_badge_for(provider_name: str, settings: "Settings") -> Tuple[str, str]:
+    """(provider, model) shown in telemetry rows / docs for a provider slot."""
+    name = (provider_name or "").strip().lower()
+    field = _TEXT_MODELS.get(name)
+    if field and field != "LOCAL_LLM_MODEL":
+        return (name, getattr(settings, field, "") or "")
+    if name == "local":
+        return ("local", settings.LOCAL_LLM_MODEL or settings.META_TEXT_MODEL or "muse-spark-1.3")
+    return ("meta", settings.META_TEXT_MODEL)
+
 
 class Settings(BaseSettings):
     ENV: str = Field(default="development")
@@ -9,23 +38,41 @@ class Settings(BaseSettings):
     HOST: str = Field(default="0.0.0.0")
 
     # ---- Model providers --------------------------------------------------
-    # Default provider is the Meta Model API (muse-spark-1.3 text/chat + speech-
-    # to text). A local OpenAI-compatible endpoint (e.g. Baseten Muse Spark Open,
-    # Ollama) is selectable with LLM_PROVIDER=local and LOCAL_LLM_BASE_URL.
+    # Primary: the first-party Meta Model API (muse-spark / muse-wonder text +
+    # muse-voice-transcribe ASR) at api.meta.ai. Alternative: a Baseten-hosted
+    # Meta open model via LLM_PROVIDER=meta with META_BASE_URL pointed at the
+    # Baseten endpoint, or a local OpenAI-compatible server (Ollama, vLLM) via
+    # LLM_PROVIDER=local and LOCAL_LLM_BASE_URL.
     LLM_PROVIDER: str = Field(default="meta")
     MODEL_API_KEY: Optional[str] = None   # canonical name from the provider docs
     META_API_KEY: Optional[str] = None    # alias accepted for existing setups
-    META_BASE_URL: str = Field(default="https://inference.baseten.co/v1")
-    META_TEXT_MODEL: str = Field(default="meta-llama/Meta-Llama-3.1-8B-Instruct")
-    META_TEXT_FALLBACK_MODELS: str = Field(default="")
+    META_BASE_URL: str = Field(default="https://api.meta.ai/v1")
+    META_TEXT_MODEL: str = Field(default="muse-spark-1.3")
+    META_TEXT_FALLBACK_MODELS: str = Field(default="muse-spark-1.2,muse-spark-1.1")
     META_ASR_MODEL: str = Field(default="muse-voice-transcribe-1.0")
     META_VISION_MODEL: str = Field(default="muse-spark-1.3")
     META_SEGMENT_MODEL: str = Field(default="sam-3.1")
+    META_IMAGE_MODEL: str = Field(default="muse-image-1.0")  # optional B-roll stills
     META_ASR_MAX_SECONDS: int = Field(default=570)  # request cap safety margin (600s limit)
 
-    # Local OpenAI-compatible endpoint (Baseten Muse Spark Open, Ollama, etc.)
+    # Separate hosted-provider slots, each independently configurable and each
+    # serving Meta models (first-party Muse or open-weight Muse Spark). They
+    # participate in the automatic text-failover chain via LLM_FALLBACK_PROVIDERS.
+    # Baseten: Meta open weights (Muse Spark Open) behind a Baseten endpoint.
+    BASETEN_API_KEY: Optional[str] = None
+    BASETEN_BASE_URL: str = Field(default="https://inference.baseten.co/v1")
+    BASETEN_MODEL: str = Field(default="meta-models/muse-spark-open")
+    # OpenRouter: Meta open-weight Muse models (Muse Spark Open) via a hosted
+    # inference provider. Serves as the text failover hop when the first-party
+    # Meta Model API is unavailable. Llama is not used anywhere in this project.
+    OPENROUTER_API_KEY: Optional[str] = None
+    OPENROUTER_BASE_URL: str = Field(default="https://openrouter.ai/api/v1")
+    OPENROUTER_TEXT_MODEL: str = Field(default="meta/muse-spark-open")
+
+    # Local OpenAI-compatible endpoint (a served Meta open-weight model, e.g.
+    # LM Studio running Muse Glimmer, or Ollama/vLLM on any host)
     LOCAL_LLM_BASE_URL: str = Field(default="http://localhost:11434/v1")
-    LOCAL_LLM_MODEL: str = Field(default="meta-llama/Meta-Llama-3.1-8B-Instruct")
+    LOCAL_LLM_MODEL: str = Field(default="meta-models/Muse-Glimmer-30B")
     LOCAL_LLM_API_KEY: Optional[str] = None
 
     # Text-to-speech: Meta MMS-TTS open weights only.
@@ -110,12 +157,20 @@ class Settings(BaseSettings):
     GH_RELEASE_TAG_PREFIX: str = Field(default="chronocut-render")
 
     # ---- Generated B-roll stills (optional, default off) --------------------
-    IMAGE_GEN_PROVIDER: str = Field(default="off")  # off | cfworkers
-    CF_ACCOUNT_ID: Optional[str] = None
-    CF_API_TOKEN: Optional[str] = None
+    # META on the Model API: muse-image-1.0 via the OpenAI-compatible Images
+    # endpoint at META_BASE_URL ($0.01 per image, billed against free credits).
+    IMAGE_GEN_PROVIDER: str = Field(default="off")  # off | muse
+    # Optional text failover: when the primary hosted Meta provider errors, the
+    # same call is retried through the failover chain (OpenRouter, then Baseten,
+    # then local — every slot serves a Meta Muse model; Llama is never used).
+    # The switch below gates the whole chain; slots without credentials are
+    # skipped at runtime.
+    ENABLE_LLM_FAILOVER: bool = Field(default=True)
+    # Failover chain order after the configured primary. Valid entries:
+    # openrouter, baseten, local.
+    LLM_FALLBACK_PROVIDERS: str = Field(default="openrouter")
     IMAGE_GEN_MAX_PER_JOB: int = Field(default=6)
-    IMAGE_GEN_STEPS: int = Field(default=4)
-    IMAGE_GEN_DAILY_NEURONS: int = Field(default=9600)  # free plan gives 10,000/day
+    IMAGE_GEN_DAILY_IMAGES: int = Field(default=60)  # controlled spend from free credits
 
     class Config:
         env_file = ".env"
@@ -129,9 +184,32 @@ class Settings(BaseSettings):
     @property
     def model_badge(self) -> Tuple[str, str]:
         """(provider, model) actually in use — shown in telemetry rows and docs."""
+        provider = (self.LLM_PROVIDER or "").strip().lower()
+        return llm_badge_for(provider, self)
+
+    @property
+    def llm_fallback_providers(self) -> List[str]:
+        """Ordered failover slots after the configured primary provider."""
+        out = []
+        for p in (self.LLM_FALLBACK_PROVIDERS or "").split(","):
+            p = p.strip().lower()
+            if p:
+                out.append(p)
+        return out
+
+    @property
+    def llm_any_provider_ready(self) -> bool:
+        """True when the primary provider or any failover slot has credentials
+        (``LLM_PROVIDER=local`` counts — it is keyless by design)."""
         if (self.LLM_PROVIDER or "").strip().lower() == "local":
-            return ("local", self.LOCAL_LLM_MODEL or self.META_TEXT_MODEL)
-        return ("meta", self.META_TEXT_MODEL)
+            return True
+        return any(
+            bool((getattr(self, k) or "").strip())
+            for k in (
+                "MODEL_API_KEY", "META_API_KEY", "BASETEN_API_KEY",
+                "OPENROUTER_API_KEY",
+            )
+        )
 
     @property
     def output_profiles(self) -> List[str]:
@@ -153,7 +231,7 @@ class Settings(BaseSettings):
     @property
     def image_gen_provider(self) -> str:
         p = (self.IMAGE_GEN_PROVIDER or "off").strip().lower()
-        return p if p in ("off", "cfworkers") else "off"
+        return p if p in ("off", "muse") else "off"
 
     @property
     def render_dispatcher(self) -> str:

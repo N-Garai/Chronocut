@@ -1,9 +1,12 @@
 """Provider abstraction over the configured generation backends.
 
 Every LLM/vision call flows through :class:`LLMProvider` implementations so the
-pipeline is provider-agnostic: the Meta Model API is the default provider and a
-local OpenAI-compatible endpoint (e.g. Baseten Muse Spark Open, Ollama) is
-selectable with ``LLM_PROVIDER=local``.
+pipeline is provider-agnostic: the first-party Meta Model API
+(https://api.meta.ai/v1, model muse-spark-1.3) is the default provider, with
+OpenRouter (meta/muse-spark-open) as the automatic failover hop. A local
+OpenAI-compatible endpoint (e.g. Ollama/vLLM serving Muse Glimmer or Muse Spark
+Open) is selectable with LLM_PROVIDER=local. Llama is not used anywhere in this
+project.
 """
 import base64
 import json
@@ -143,7 +146,13 @@ class _OpenAICompatibleProvider(LLMProvider):
             )
 
         for attempt in range(3):
-            for model_id in [model_name] + list(self._settings.meta_text_fallback_models):
+            # In-family fallback models are a property of the first-party Meta
+            # Model API (muse-spark-1.2/1.1). Other hosts carry a single model
+            # id per slot, so their retry list is just that one id.
+            family_models = [model_name]
+            if self.name == "meta":
+                family_models += list(self._settings.meta_text_fallback_models)
+            for model_id in family_models:
                 try:
                     if attempt == 0 and schema:
                         rd = await asyncio.to_thread(_one_request, model_id, strict_schema=True)
@@ -270,11 +279,10 @@ class _OpenAICompatibleProvider(LLMProvider):
 
 
 class MetaProvider(_OpenAICompatibleProvider):
-    """Meta Model API client (OpenAI-compatible chat completions endpoint).
+    """First-party Meta Model API client (OpenAI-compatible chat completions).
 
-    Retargeted to Muse Spark Open on Baseten: ``META_BASE_URL`` points at the
-    Baseten endpoint and calls carry ``X-Baseten-Api-Key`` plus a session
-    affinity header so routed requests stay on the same model instance.
+    Base URL is https://api.meta.ai/v1 by default, model is muse-spark-1.3.
+    Auth via MODEL_API_KEY (canonical) or META_API_KEY (alias).
     """
 
     name = "meta"
@@ -284,11 +292,39 @@ class MetaProvider(_OpenAICompatibleProvider):
         api_key = settings.provider_api_key
         if not api_key:
             raise RuntimeError("MODEL_API_KEY/META_API_KEY is not configured.")
+        extra_headers = {"X-Session-Id": "chronocut-backend"}
         _OpenAICompatibleProvider.__init__(
             self,
             base_url=settings.META_BASE_URL,
             api_key=api_key,
             default_model=settings.META_TEXT_MODEL,
+            headers=extra_headers,
+        )
+
+
+class BasetenProvider(_OpenAICompatibleProvider):
+    """Baseten-hosted Meta open model client (OpenAI-compatible).
+
+    Own standalone slot: ``BASETEN_API_KEY`` + ``BASETEN_BASE_URL`` +
+    ``BASETEN_MODEL`` (Meta open weights, e.g. Muse Spark Open). Kept separate
+    from the first-party Meta Model API so either host can be primary or a
+    failover hop independently. Baseten additionally consumes the
+    ``X-Baseten-Api-Key`` header; session affinity keeps routed requests
+    on the same model instance.
+    """
+
+    name = "baseten"
+
+    def __init__(self):
+        from app.config import settings
+        api_key = (settings.BASETEN_API_KEY or "").strip()
+        if not api_key:
+            raise RuntimeError("BASETEN_API_KEY is not configured.")
+        _OpenAICompatibleProvider.__init__(
+            self,
+            base_url=settings.BASETEN_BASE_URL,
+            api_key=api_key,
+            default_model=settings.BASETEN_MODEL,
             headers={
                 "X-Baseten-Api-Key": api_key,
                 "X-Session-Id": "chronocut-backend",
@@ -296,8 +332,36 @@ class MetaProvider(_OpenAICompatibleProvider):
         )
 
 
+class OpenRouterProvider(_OpenAICompatibleProvider):
+    """OpenRouter-hosted Muse client (OpenAI-compatible).
+
+    Serves Meta Muse models (``meta/muse-spark-open`` and the mirrored
+    first-party muse-spark variants). Standalone slot via
+    ``OPENROUTER_API_KEY`` + ``OPENROUTER_BASE_URL`` + ``OPENROUTER_TEXT_MODEL``; attribution
+    headers optional per provider docs but honest about the client.
+    """
+
+    name = "openrouter"
+
+    def __init__(self):
+        from app.config import settings
+        api_key = (settings.OPENROUTER_API_KEY or "").strip()
+        if not api_key:
+            raise RuntimeError("OPENROUTER_API_KEY is not configured.")
+        _OpenAICompatibleProvider.__init__(
+            self,
+            base_url=settings.OPENROUTER_BASE_URL,
+            api_key=api_key,
+            default_model=settings.OPENROUTER_TEXT_MODEL,
+            headers={
+                "X-Title": "Chronocut",
+            },
+        )
+
+
 class LocalOpenWeightProvider(_OpenAICompatibleProvider):
-    """Local OpenAI-compatible endpoint (Baseten Muse Spark Open, Ollama, etc.).
+    """Local OpenAI-compatible endpoint (LM Studio/Ollama serving a Meta
+    open-weight model such as Muse Glimmer, or Muse Spark Open on a host).
 
     Keyed by ``LLM_PROVIDER=local``; URL via ``LOCAL_LLM_BASE_URL``, model via
     ``LOCAL_LLM_MODEL``.
@@ -322,4 +386,36 @@ def get_provider(provider_name: Optional[str] = None) -> LLMProvider:
     name = ((provider_name or settings.LLM_PROVIDER) or "meta").strip().lower()
     if name == "local":
         return LocalOpenWeightProvider()
+    if name == "baseten":
+        return BasetenProvider()
+    if name == "openrouter":
+        return OpenRouterProvider()
     return MetaProvider()
+
+
+def get_failover_chain() -> list[LLMProvider]:
+    """Ordered list of failover providers after the configured primary.
+
+    Skips any slot whose API key is not configured, so a missing key never
+    crashes startup — the call site simply tries each live provider in order.
+    """
+    from app.config import settings
+
+    chain: list[LLMProvider] = []
+    for name in (s.strip().lower() for s in (settings.LLM_FALLBACK_PROVIDERS or "openrouter").split(",")):
+        if name == "openrouter":
+            try:
+                chain.append(OpenRouterProvider())
+            except RuntimeError:
+                pass
+        elif name == "baseten":
+            try:
+                chain.append(BasetenProvider())
+            except RuntimeError:
+                pass
+        elif name == "local":
+            try:
+                chain.append(LocalOpenWeightProvider())
+            except RuntimeError:
+                pass
+    return chain

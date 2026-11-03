@@ -527,7 +527,7 @@ class _EDLState:
         derived from the prompt hash for reuse across revisions, empty path)
         and the carrier materializes it after the apply; provider off or
         failure degrades the beat to an uploaded still (see
-        ``tools/imagegen/cfworkers.ensure_generated_assets``). The op itself
+        ``tools/imagegen/muse.ensure_generated_assets``). The op itself
         never waits on the network, so applies stay fast."""
         kind = str(a.get("kind") or "").strip().lower()
         prompt = str(a.get("prompt") or "").strip()
@@ -536,7 +536,7 @@ class _EDLState:
             if not prompt:
                 raise OperationValidationError(["insert_broll: generated source requires a prompt"])
             if source_id in ("", "none", "generated"):
-                from app.tools.imagegen.cfworkers import generated_source_id
+                from app.tools.imagegen.muse import generated_source_id
                 source_id = generated_source_id(prompt)
             if self._source(source_id) is None:
                 self.edl.setdefault("sources", []).append({

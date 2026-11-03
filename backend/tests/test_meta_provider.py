@@ -55,10 +55,10 @@ def _provider(content='{"ok": true}', fail_schema=False):
     prov._client = _StubClient(content, fail_schema)
     prov._settings = SimpleNamespace(
         META_BASE_URL="https://api.baseten.co/v1",
-        META_TEXT_MODEL="meta-llama/Meta-Llama-3.1-8B-Instruct",
+        META_TEXT_MODEL="meta-models/muse-spark-open",
         meta_text_fallback_models=[],
     )
-    prov._default_model = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    prov._default_model = "meta-models/muse-spark-open"
     return prov
 
 
@@ -67,9 +67,9 @@ def _local_provider(content='{"ok": true}'):
     prov._client = _StubClient(content, False)
     prov._settings = SimpleNamespace(
         LOCAL_LLM_BASE_URL="http://localhost:11434/v1",
-        LOCAL_LLM_MODEL="meta-llama/Meta-Llama-3.1-8B-Instruct",
+        LOCAL_LLM_MODEL="meta-models/Muse-Glimmer-30B",
     )
-    prov._default_model = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    prov._default_model = "meta-models/Muse-Glimmer-30B"
     return prov
 
 
@@ -115,7 +115,7 @@ def test_meta_pricing_in_governor():
     assert G._PRICING["input_usd_per_m"]["muse"] == 1.25
     assert G._PRICING["output_usd_per_m"]["muse"] == 4.25
     assert G._USD_PER_AUDIO_HOUR == 0.18
-    assert G._is_muse("muse-spark-1.3") and not G._is_muse("meta-llama/Meta-Llama-3.1-8B-Instruct")
+    assert G._is_muse("muse-spark-1.3") and not G._is_muse("openai/gpt-4o")
 
 
 def test_scored_llm_call_raises_when_no_provider_key(monkeypatch):

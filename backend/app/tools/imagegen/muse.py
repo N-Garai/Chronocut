@@ -1,12 +1,14 @@
-"""Generated B-roll stills via Workers AI ``flux-1-schnell`` (free-tier safe).
+"""Generated B-roll stills via Meta Image (``muse-image-1.0``) on the Model API.
 
-Cost model (verified free plan, Oct 2026): 10,000 free neurons/day; one
-``flux-1-schnell`` image costs ``ceil((w/512)*(h/512))`` tiles at 4.80
-neurons each plus 9.60 per step, so a default 1024x576 4-step still costs
-~57.6 neurons — about 170 images/day inside the free daily allowance.
+Requests hit the OpenAI-compatible Images endpoint at ``META_BASE_URL``
+(``POST /v1/images/generations``) with the same key as the text models and
+Muse Voice Transcribe. Meta Image is billed per generated image (flat
+$0.01), paid from the provisioned free credits; an in-process daily image
+budget (``IMAGE_GEN_DAILY_IMAGES``) reserves the spend so a burst of jobs
+cannot drain credits in one day.
 
 Failures are always graceful: provider ``off`` is a no-op, an exhausted
-daily neuron budget refuses further calls, HTTP errors degrade that beat
+daily image budget refuses further calls, HTTP errors degrade that beat
 back to an uploaded still/footage when possible, and generation never
 blocks or fails a render. Generated stills are cached under the job's
 media tree by prompt hash and reused across revisions.
@@ -16,61 +18,50 @@ import hashlib
 import logging
 import os
 import threading
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
 
 from app.config import settings
 
-logger = logging.getLogger("chronocut.tools.imagegen.cfworkers")
-
-_MODEL = "@cf/black-forest-labs/flux-1-schnell"
-_COST_PER_TILE = 4.8   # 512x512 image tile
-_COST_PER_STEP = 9.6
+logger = logging.getLogger("chronocut.tools.imagegen.muse")
 
 __all__ = [
-    "cf_imagegen_available", "generate_still", "generate_broll_stills",
-    "estimate_neurons", "neuron_budget_status", "ensure_generated_assets",
-    "generated_source_id", "GEN_SOURCE_PREFIX",
+    "muse_imagegen_available", "generate_still", "generate_broll_stills",
+    "image_budget_status", "ensure_generated_assets", "generated_source_id",
+    "GEN_SOURCE_PREFIX",
 ]
 
 GEN_SOURCE_PREFIX = "gen-"
 
 
-def cf_imagegen_available() -> bool:
-    """True only when the provider is enabled AND credentials exist."""
-    return (settings.image_gen_provider == "cfworkers"
-            and bool(settings.CF_ACCOUNT_ID and settings.CF_API_TOKEN))
+def muse_imagegen_available() -> bool:
+    """True only when the provider is enabled AND the Model API key exists."""
+    return (settings.image_gen_provider == "muse"
+            and bool((settings.provider_api_key or "").strip()))
 
 
-def estimate_neurons(width: int = 1024, height: int = 576, steps: int = 4) -> float:
-    """Fixed cost model — 4.8 neurons per 512^2 tile + 9.6 per step."""
-    w = max(1, int(width)); h = max(1, int(height)); s = max(1, int(steps))
-    tiles = ((w + 511) // 512) * ((h + 511) // 512)
-    return round(tiles * _COST_PER_TILE + s * _COST_PER_STEP, 2)
-
-
-class _NeuronBudget:
-    """In-process daily neuron reserve/consume. Loses count across restarts
-    (the provider 429s loudly when the free day is exhausted anyway) — the
-    counter exists to *prevent* silent 429 storms, not to be an audit."""
+class _ImageBudget:
+    """In-process daily generated-image counter. Loses count across restarts
+    (the Model API keeps its own usage metering) — the counter exists to
+    *cap* accidental credit spend, not to be an audit."""
 
     def __init__(self, daily_limit: int) -> None:
         self.daily_limit = max(0, int(daily_limit))
         self._lock = threading.Lock()
         self._day = ""
-        self._used = 0.0
-        self._reserved = 0.0
+        self._used = 0
+        self._reserved = 0
 
     def _roll(self) -> None:
+        from datetime import datetime, timezone
         today = datetime.now(timezone.utc).strftime("%Y%m%d")
         if today != self._day:
             self._day = today
-            self._used = 0.0
-            self._reserved = 0.0
+            self._used = 0
+            self._reserved = 0
 
-    def reserve(self, amount: float) -> bool:
+    def reserve(self, amount: int) -> bool:
         with self._lock:
             self._roll()
             if self._used + self._reserved + amount > self.daily_limit:
@@ -78,12 +69,12 @@ class _NeuronBudget:
             self._reserved += amount
             return True
 
-    def consume(self, amount: float, *, committed: bool) -> float:
+    def consume(self, amount: int, *, committed: bool) -> int:
         with self._lock:
             self._roll()
-            self._reserved = max(0.0, self._reserved - amount)
+            self._reserved = max(0, self._reserved - amount)
             if committed:
-                self._used = round(self._used + amount, 2)
+                self._used += int(amount)
             return self._used
 
     def status(self) -> Dict[str, Any]:
@@ -94,25 +85,25 @@ class _NeuronBudget:
                     "daily_limit": self.daily_limit}
 
 
-_budget = _NeuronBudget(getattr(settings, "IMAGE_GEN_DAILY_NEURONS", 9600))
+_budget = _ImageBudget(getattr(settings, "IMAGE_GEN_DAILY_IMAGES", 60))
 
 
-def neuron_budget_status() -> Dict[str, Any]:
+def image_budget_status() -> Dict[str, Any]:
     out = dict(_budget.status())
     out["provider"] = settings.image_gen_provider
     return out
 
 
-def _ledger_note(job_id: Optional[str], neurons: float, prompt: str) -> None:
-    """Usage rows land in the cost ledger as $0 units (external free API)."""
+def _ledger_note(job_id: Optional[str], images: int, prompt: str) -> None:
+    """Usage rows land in the cost ledger at Meta Image's flat per-image price."""
     if not job_id or os.getenv("CHRONOCUT_TEST"):
         return
     try:
         from app.services.firestore_service import JobStateService
         JobStateService.ledger_write(job_id, {
-            "tool": "imagegen_flux_schnell", "provider": "cfworkers",
-            "calls": 1, "cost_cents": 0.0, "cached": False,
-            "units": f"{neurons} neurons", "note": prompt[:80],
+            "tool": "imagegen_muse_image", "provider": "meta",
+            "calls": 1, "cost_cents": round(images * 1.0, 2), "cached": False,
+            "units": f"{images} image(s)", "note": prompt[:80],
         })
     except Exception:  # ledger is best-effort
         pass
@@ -124,87 +115,92 @@ def generate_still(prompt: str, out_path: Optional[str] = None,
                    job_id: Optional[str] = None) -> Dict[str, Any]:
     """Generate one still; returns a shot visual_source-compatible dict.
 
-    Contract: provider off/missing creds -> no-op;
-    exhausted daily budget -> refused attempt with the snapshot in the
-    result; network/API failure -> ``ok: False`` with a short error. The
-    cache is keyed by ``(prompt, width, height)`` so a retry or a later
-    revision that requests the same prompt reuses the still for free.
+    Contract: provider off/missing creds -> no-op; exhausted daily budget ->
+    refused attempt with the snapshot in the result; network/API failure ->
+    ``ok: False`` with a short error. The cache is keyed by
+    ``(prompt, width, height)`` so a retry or a later revision that requests
+    the same prompt reuses the still.
     """
-    if settings.image_gen_provider != "cfworkers":
+    if settings.image_gen_provider != "muse":
         return {"ok": False, "noop": "provider_off",
                 "error": "image generation disabled (IMAGE_GEN_PROVIDER=off)"}
-    if not cf_imagegen_available():
+    if not muse_imagegen_available():
         return {"ok": False, "noop": "not_configured",
-                "error": "Cloudflare Workers AI not configured (CF_ACCOUNT_ID/CF_API_TOKEN)"}
-    neurons = estimate_neurons(width, height, settings.IMAGE_GEN_STEPS)
-    if not _budget.reserve(neurons):
+                "error": "Meta Image not configured (IMAGE_GEN_PROVIDER=muse needs MODEL_API_KEY)"}
+    if not _budget.reserve(1):
         st = _budget.status()
-        used = st["used"] + st["reserved"]
         return {"ok": False, "noop": "quota_exhausted",
-                "error": (f"daily neuron budget exhausted ({used:.1f}/{st['daily_limit']}); "
-                          f"another image would cost {neurons:.1f}")}
+                "error": (f"daily image budget exhausted "
+                          f"({st['used'] + st['reserved']}/{st['daily_limit']})")}
 
-    cache_key = hashlib.sha1(
-        f"{prompt}|{width}x{height}|{int(settings.IMAGE_GEN_STEPS)}".encode()).hexdigest()
+    cache_key = hashlib.sha1(f"{prompt}|{width}x{height}".encode()).hexdigest()
     if out_path is None:
         out_dir = os.path.join(os.getcwd(), "tmp", "generated_stills")
         os.makedirs(out_dir, exist_ok=True)
         out_path = os.path.join(out_dir, f"{cache_key}.png")
 
     # Cache: a still for the same prompt at the same size already exists in
-    # this job -> reuse it across revisions at zero neurons.
+    # this job -> reuse it across revisions without another billed image.
     if os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
-        _budget.consume(neurons, committed=False)   # cache hit: neurons untouched
-        _ledger_note(job_id, 0.0, prompt)
-        return {"ok": True, "file": out_path, "cached": True, "source": "cfworkers",
+        _budget.consume(1, committed=False)   # cache hit: budget untouched
+        _ledger_note(job_id, 0, prompt)
+        return {"ok": True, "file": out_path, "cached": True, "source": "meta",
                 "type": "ai_still", "effect": "ken_burns_slow_zoom", "prompt": prompt[:200]}
 
     committed = False
     try:
-        url = (f"https://api.cloudflare.com/client/v4/accounts/"
-               f"{settings.CF_ACCOUNT_ID}/ai/run/{_MODEL}")
+        url = f"{(settings.META_BASE_URL or '').rstrip('/')}/images/generations"
         resp = requests.post(
             url,
-            headers={"Authorization": f"Bearer {settings.CF_API_TOKEN}"},
-            json={
-                "prompt": prompt[:1200],
-                "steps": max(1, min(int(settings.IMAGE_GEN_STEPS), 8)),
-                "width": width,
-                "height": height,
-                "negative_prompt": negative,
+            headers={
+                "Authorization": f"Bearer {settings.provider_api_key}",
+                "Content-Type": "application/json",
             },
-            timeout=120,
+            json={
+                "model": settings.META_IMAGE_MODEL,
+                "prompt": prompt[:1200],
+                "n": 1,
+                "size": f"{width}x{height}",       # aspect ratio hint per docs
+                "response_format": "b64_json",
+                "output_format": "png",
+                # B-roll stills never rely on real-world references; turning
+                # the searchagentic tools off keeps generation fast/cheap.
+                "tool_enablement": {
+                    "enable_image_search": False,
+                    "enable_web_search": False,
+                    "enable_shell": False,
+                },
+            },
+            timeout=180,
         )
         resp.raise_for_status()
         data = resp.json()
-        if not data.get("success"):
-            raise ValueError(str(data.get("errors") or data)[:200])
-        b64 = (data.get("result") or {}).get("image")
+        b64 = ((data.get("data") or [{}])[0]).get("b64_json")
         if not b64:
             raise ValueError("no image in response")
         tmp_path = out_path + ".part"
         os.makedirs(os.path.dirname(tmp_path) or ".", exist_ok=True)
         with open(tmp_path, "wb") as f:
             f.write(base64.b64decode(b64))
-        _budget.consume(neurons, committed=True)
+        _budget.consume(1, committed=True)
         committed = True
         os.replace(tmp_path, out_path)
-        _ledger_note(job_id, neurons, prompt)
-        return {"ok": True, "file": out_path, "cached": False, "source": "cfworkers",
+        _ledger_note(job_id, 1, prompt)
+        return {"ok": True, "file": out_path, "cached": False, "source": "meta",
                 "type": "ai_still", "effect": "ken_burns_slow_zoom",
-                "neurons": neurons, "prompt": prompt[:200]}
+                "images": 1, "prompt": prompt[:200]}
     except Exception as e:
-        logger.warning("Workers AI imagegen failed: %s", e)
+        logger.warning("Meta Image imagegen failed: %s", e)
         return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}
     finally:
         if not committed:
-            _budget.consume(neurons, committed=False)
+            _budget.consume(1, committed=False)
 
 
 def generate_broll_stills(prompts: List[str], out_dir: str,
                           *, limit: Optional[int] = None,
                           job_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Generate up to ``limit`` stills for a job; cheap, guarded, best-effort."""
+    """Generate up to ``limit`` stills for a job; capped, guarded, best-effort."""
     cap = int(limit or settings.IMAGE_GEN_MAX_PER_JOB)
     out: List[Dict[str, Any]] = []
     os.makedirs(out_dir, exist_ok=True)
@@ -260,7 +256,7 @@ def ensure_generated_assets(job_id: str, edl: Dict[str, Any],
             src["path"] = res["file"]
             changed = True
             _activity(job_id, "broll_generated", "succeeded",
-                      f"generated still for {src.get('id')} ({res.get('neurons', 0)} neurons, "
+                      f"generated still for {src.get('id')} ({res.get('images', 0)} image(s), "
                       f"cached={bool(res.get('cached'))})")
             continue
         noop = res.get("noop") or "error"

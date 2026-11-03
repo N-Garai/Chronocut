@@ -121,7 +121,12 @@ async def _startup():
                 f"(LOCAL_LLM_MODEL: {settings.LOCAL_LLM_MODEL})"
             )
         else:
-            logger.info(f"provider API key present: {bool(mk)} (ends …{mk[-4:] if mk else 'NONE'})")
+            # Primary key plus each independent failover slot, so the log
+            # reveals exactly which chain hops are available in the container.
+            logger.info(f"primary provider API key present: {bool(mk)} (ends …{mk[-4:] if mk else 'NONE'})")
+            for slot in ("BASETEN_API_KEY", "OPENROUTER_API_KEY"):
+                sk = (getattr(settings, slot) or "").strip()
+                logger.info(f"{slot} present: {bool(sk)} (ends …{sk[-4:] if sk else 'NONE'})")
         logger.info(f"PEXELS_API_KEY present: {bool(pk)} (ends …{pk[-4:] if pk else 'NONE'})")
         from app.tools.llm.call import validate_model
         res = await validate_model()

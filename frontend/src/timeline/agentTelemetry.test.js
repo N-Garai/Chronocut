@@ -97,7 +97,7 @@ describe('model usage badge', () => {
   it('joins provider and model for the row badge', () => {
     expect(normalizeRow({ seq: 1, provider: 'meta', model: 'muse-spark-1.3' }).modelBadge)
       .toBe('meta · muse-spark-1.3')
-    expect(normalizeRow({ seq: 1, model: 'flux-1-schnell' }).modelBadge).toBe('flux-1-schnell')
+    expect(normalizeRow({ seq: 1, model: 'muse-image-1.0' }).modelBadge).toBe('muse-image-1.0')
     expect(normalizeRow({ seq: 1 }).modelBadge).toBe('')
   })
 

@@ -24,7 +24,16 @@ services:
       - key: MODEL_API_KEY
         sync: false
       - key: META_BASE_URL
-        value: https://inference.baseten.co/v1
+        value: https://api.meta.ai/v1
+      # ---- automatic failover chain (each slot needs its own key; slots
+      # without a key are skipped at runtime; every slot serves a Meta
+      # Muse model — muse-spark-1.x or the open-weight Muse Spark Open)
+      - key: BASETEN_API_KEY
+        sync: false              # pending account approval; leave empty until granted
+      - key: GROQ_API_KEY
+        sync: false              # Muse Spark Open preview (organization-gated)
+      - key: OPENROUTER_API_KEY
+        sync: false              # Muse Spark Open at provider rates (needs credits)
       # ---- security / CORS ------------------------------------------------
       # The API never serves the frontend; CORS lists the static-site origin.
       - key: CORS_ORIGINS

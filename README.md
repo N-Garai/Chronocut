@@ -64,7 +64,7 @@ Each stage also records a specialist decision in a per-job agent context documen
 
 Framing is per export profile: a 16:9 cut rendered to 9:16 or 1:1 gets an aspect-correct crop per clip, shifted toward the detected subject when a vision provider is available and centred otherwise. Video clips additionally get a whole-clip summary through the provider's Files API before the storyboard is composed.
 
-### The EDL contract
+## The EDL contract
 
 The EDL is a versioned JSON document with fixed track order (`v1` video, `c1` captions, `a1` narration, `m1` music, `s1` sfx) and a bounded operation vocabulary:
 
@@ -106,7 +106,7 @@ frontend/
 
 - Python 3.11+ and FFmpeg on the backend host (`ffmpeg` / `ffprobe` on PATH)
 - Node.js 18+ for the frontend
-- Optional: a language-model API key (the hosted Meta Model API); a local open-weights endpoint via `LLM_PROVIDER=local` needs none, Pexels key for stock footage
+- Optional: a language-model API key (the first-party Meta Model API at `api.meta.ai`, or an OpenAI-compatible endpoint serving a Meta open-weight model such as Muse Spark Open via `LLM_PROVIDER=local`). Pexels key for stock footage.
 
 ### Backend
 
@@ -174,15 +174,26 @@ cd frontend && npm test
 
 ## Models in use
 
-Every generation call goes through one provider layer, and every agent-activity row in the telemetry feed carries the provider and model that produced it (for example `meta · meta-llama/Meta-Llama-3.1-8B-Instruct`, or `local · <LOCAL_LLM_MODEL>` when `LLM_PROVIDER=local`), so the model actually answering is never a guess.
+Every runtime model in ChronoCut is a Meta model — the hosted Muse family plus Meta's open-weight releases — and every generation call goes through one provider layer. Each agent-activity row in the telemetry feed carries the provider and model that produced it (for example `meta · muse-spark-1.3`, or `local · <LOCAL_LLM_MODEL>` when `LLM_PROVIDER=local`), so the model actually answering is never a guess.
+
+**Which Meta models run where:**
+
+- **`muse-spark-1.3`** (with `muse-spark-1.2` / `muse-spark-1.1` as in-family fallbacks) — script, direction, edit decisions, vision tagging. Runs on the first-party **Meta Model API** (`api.meta.ai`).
+- **`muse-voice-transcribe-1.0`** — speech-to-text for uploaded footage. Runs on the first-party **Meta Model API**.
+- **`muse-image-1.0`** — optional generated B-roll stills. Runs on the first-party **Meta Model API** (Images endpoint), off by default.
+- **`sam-3.1`** — optional media segmentation. Runs on the first-party **Meta Model API**.
+- **Meta MMS-TTS** (`facebook/mms-tts-eng`) — narration. Open weights, runs **locally**.
+- **`muse-spark-open`** (open weights) — the failover host for hosted slots: **Baseten**, **OpenRouter** (every slot serves Meta Muse-family models; Llama is not used). Runs on your own `LLM_PROVIDER=local` endpoint or via OpenRouter.
+- **`meta-models/Muse-Glimmer-30B`** (open weights, Apache 2.0) — optional `LLM_PROVIDER=local` slot, self-hosted on consumer hardware.
 
 | Role | Default model | Where it shows up |
 |------|---------------|-------------------|
-| Script, direction, edit decisions, vision tagging | `meta-llama/Meta-Llama-3.1-8B-Instruct` via `META_BASE_URL` (any OpenAI-compatible Meta-model host) | `provider` / `model` on each telemetry row |
+| Script, direction, edit decisions, vision tagging | `muse-spark-1.3` via `META_BASE_URL` — the first-party Meta Model API | `provider` / `model` on each telemetry row |
 | Speech-to-text | Muse Voice Transcribe, chunked to 10-minute requests | Archivist telemetry rows |
-| Generated B-roll stills | `flux-1-schnell` on Workers AI, per-beat, optional, off by default | `scene_caster` telemetry rows |
+| Generated B-roll stills | `muse-image-1.0` on the Model API Images endpoint, per-beat, optional, off by default | `scene_caster` telemetry rows |
 | Narration | Meta MMS-TTS open weights (`facebook/mms-tts-eng`), local | Narrator agent rows |
-| Fallback text provider | None — deterministic templates when no provider key is configured | Same rows, `provider: meta` or `local` |
+| Hosted failover | one chain of Meta-model slots: OpenRouter → Baseten (`muse-spark-open` open weights / mirrored first-party Muse), tried in that order when the primary provider errors | Same rows, `provider` names the slot that answered |
+| Fallback text provider | None beyond the failover chain — deterministic templates when no slot is configured | Same rows, `provider: meta`/`openrouter`/`baseten`/`local` |
 
 ## Output profiles
 
@@ -194,12 +205,17 @@ Key environment variables (see `backend/.env.example` for the full set):
 
 | Variable | Purpose |
 |----------|---------|
-| `LLM_PROVIDER` | `meta` (default, OpenAI-compatible endpoint) or `local` |
-| `MODEL_API_KEY` / `META_API_KEY` | Meta Model API key |
-| `META_BASE_URL` | `https://inference.baseten.co/v1` |
-| `META_TEXT_MODEL` | `meta-llama/Meta-Llama-3.1-8B-Instruct` |
+| `LLM_PROVIDER` | `meta` (default, first-party Meta Model API) or `local` (OpenAI-compatible endpoint serving a Meta open-weight model) |
+| `MODEL_API_KEY` / `META_API_KEY` | Meta Model API key (get one at https://dev.meta.ai) |
+| `META_BASE_URL` | `https://api.meta.ai/v1` (first-party Meta Model API; Baseten endpoint on request) |
+| `META_TEXT_MODEL` | `muse-spark-1.3` |
+| `BASETEN_API_KEY` / `BASETEN_BASE_URL` / `BASETEN_MODEL` | Baseten-hosted Muse Spark Open slot (own key; used as a failover hop, or primary via `LLM_PROVIDER=baseten`) |
+| `OPENROUTER_API_KEY` / `OPENROUTER_TEXT_MODEL` | OpenRouter-hosted Muse slot (at provider rates; failover hop). Get a key at https://openrouter.ai/keys |
+| `LLM_FALLBACK_PROVIDERS` | Failover chain order after the primary (default `openrouter`) |
+| `ENABLE_LLM_FAILOVER` | Master switch for the automatic failover chain (default `true`) |
 | `LOCAL_LLM_BASE_URL` | `http://localhost:11434/v1` |
-| `LOCAL_LLM_MODEL` | `meta-llama/Meta-Llama-3.1-8B-Instruct` |
+| `LOCAL_LLM_MODEL` | `meta-models/Muse-Glimmer-30B` (open weights, local server) |
+| `IMAGE_GEN_PROVIDER` | `off` (default) or `muse` — first-party Muse Image B-roll stills |
 | `TTS_PROVIDER` | `mms` (Meta MMS-TTS open weights) |
 | `MMS_TTS_LANG` | `eng` |
 | `FIRESTORE_PROJECT_ID` | Enables Firestore persistence; plain JSON file otherwise |
@@ -221,7 +237,7 @@ The render path continuously guards its memory use: it logs available RAM before
 
 Three independent pieces, all free-tier friendly:
 
-1. **API (one web service).** Build the `backend/` image (`backend/Dockerfile`) and run it with a health check on `/health`. It never serves the frontend. Required variables: `LLM_PROVIDER`, `MODEL_API_KEY` (omit entirely for a keyless `LLM_PROVIDER=local` setup), `CORS_ORIGINS` (the static site origin), `APP_BASE_URL` (its own public URL, used by the keep-warm self-ping) or `KEEP_WARM=off`, and optionally `FIRESTORE_PROJECT_ID` plus credentials. Without Firestore it persists to a local JSON store, which is fine for a demo but not durable across restarts.
+1. **API (one web service).** Build the `backend/` image (`backend/Dockerfile`) and run it with a health check on `/health`. It never serves the frontend. Required variables: `LLM_PROVIDER`, `MODEL_API_KEY` (Meta Model API key; omit entirely for a keyless `LLM_PROVIDER=local` setup), `CORS_ORIGINS` (the static site origin), `APP_BASE_URL` (its own public URL, used by the keep-warm self-ping) or `KEEP_WARM=off`, and optionally `FIRESTORE_PROJECT_ID` plus credentials. Without Firestore it persists to a local JSON store, which is fine for a demo but not durable across restarts. The optional failover chain (`BASETEN_API_KEY`, `OPENROUTER_API_KEY`) retries a failed hosted call through the next configured Meta Muse-model slot before degrading to deterministic templates.
 2. **Frontend (static build).** `cd frontend && npm ci && npm run build`, publish `dist/`. Set `VITE_API_BASE_URL` to the API origin at build time. `frontend/public/_redirects` already provides the SPA fallback so deep links such as `/studio/<id>/timeline` load; most static hosts honour it (or configure the equivalent rewrite).
 3. **Render worker (GitHub Actions).** Set `RENDER_DISPATCHER=actions`, `GH_REPO`, and a fine-grained `GH_DISPATCH_TOKEN` with `actions:write` on the API, and add the repository secrets `FIRESTORE_PROJECT_ID`, `GOOGLE_APPLICATION_CREDENTIALS_JSON` (and `SUPABASE_URL` / `SUPABASE_SERVICE_KEY` when `STORAGE_BACKEND=supabase`). The API then dispatches `chronocut-render` to `.github/workflows/render-worker.yml`, which renders on the GitHub-hosted runner and writes the finished file through the configured storage backend. If the dispatch is unavailable the API falls back to an in-process render, so a single service can still produce output on a small job.
 

@@ -138,7 +138,7 @@ def test_rows_carry_the_provider_model_badge(monkeypatch):
     from app.config import settings
 
     monkeypatch.setattr(settings, "LLM_PROVIDER", "meta", raising=False)
-    monkeypatch.setattr(settings, "META_TEXT_MODEL", "meta-llama/Meta-Llama-3.1-8B-Instruct", raising=False)
+    monkeypatch.setattr(settings, "META_TEXT_MODEL", "muse-spark-1.3", raising=False)
     row = record_activity("j-tel-badge", "editor", "plan")
     assert (row["provider"], row["model"]) == ("meta", "muse-spark-1.3")
 
