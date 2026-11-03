@@ -31,7 +31,7 @@ export function useJob(jobId) {
         if (!alive) return
         if (e.status === 404) { setJobMissing(true); setLoaded(true); return }
       }
-      if (!stop) timer = setTimeout(tick, 1500)
+      if (!stop) timer = setTimeout(tick, 3000)
     }
     tick()
     return () => { alive = false; clearTimeout(timer) }

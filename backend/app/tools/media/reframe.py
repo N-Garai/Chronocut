@@ -93,14 +93,14 @@ def _vision_configured() -> bool:
         return False
 
 
-def compute_focus(media_path: Optional[str], job_id: Optional[str] = None,
+async def compute_focus(media_path: Optional[str], job_id: Optional[str] = None,
                   *, prompt: str = "person") -> Optional[Tuple[float, float]]:
     """Subject centre (normalized) for one source; ``None`` when unavailable."""
     if not media_path or not _vision_configured():
         return None
     try:
         from app.tools.vision.sam_reframe import subject_box
-        box = subject_box(media_path, prompt, job_id=job_id)
+        box = await subject_box(media_path, prompt, job_id=job_id)
         if not box:
             return None
         return ((box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0)
@@ -109,7 +109,7 @@ def compute_focus(media_path: Optional[str], job_id: Optional[str] = None,
         return None
 
 
-def reframe_sources(sources: Iterable[Dict[str, Any]], job_id: Optional[str] = None,
+async def reframe_sources(sources: Iterable[Dict[str, Any]], job_id: Optional[str] = None,
                     *, cap: int = MAX_SUBJECT_PROBES) -> Dict[str, Dict[str, float]]:
     """Compute subject focus for up to ``cap`` visual sources.
 
@@ -128,7 +128,7 @@ def reframe_sources(sources: Iterable[Dict[str, Any]], job_id: Optional[str] = N
         if kind not in ("image", "video"):
             continue
         path = resolve_job_path(str(job_id or ""), str(src.get("path") or ""))
-        focus = compute_focus(path, job_id)
+        focus = await compute_focus(path, job_id)
         probed += 1
         if focus:
             out[str(src.get("id"))] = {"x": round(focus[0], 4), "y": round(focus[1], 4)}

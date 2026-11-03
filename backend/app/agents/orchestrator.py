@@ -474,7 +474,7 @@ class LeadOrchestratorAgent:
                         try:
                             from app.tools.media.reframe import reframe_sources
                             from app.agents.subagents import record_pipeline_stage as _stage
-                            _focus = reframe_sources(_stored_edl.get("sources") or [], job_id)
+                            _focus = await reframe_sources(_stored_edl.get("sources") or [], job_id)
                             _stage(job_id, "render", "framer", keyword="auto",
                                    data={"focus": _focus, "profile": profiles[0],
                                          "sources": len(_stored_edl.get("sources") or [])},

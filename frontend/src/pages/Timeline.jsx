@@ -21,8 +21,11 @@ const TERMINAL_OK = ['COMPLETE', 'NEEDS_REVIEW']
 
 /**
  * Timeline — the `/studio/:jobId/timeline` workspace.
- * States: loading / not_found / pipeline_running / waiting_for_edl / ready /
- * render_failed. Never auto-creates a job on 404; deep-link `?t=12.4` seeks.
+ *
+ * The timeline opens IMMEDIATELY when a job exists, even while the pipeline
+ * is still running. Clips appear on the track as the editor agent creates them
+ * (EDL revisions stream over SSE). Users can scrub, select, trim, split and
+ * issue agent commands while the pipeline is still working.
  */
 export default function Timeline() {
   const { jobId } = useParams()
@@ -61,7 +64,7 @@ export default function Timeline() {
     if (!edl) return
     const t = Number(params.get('t'))
     if (Number.isFinite(t) && t > 0) setPlayheadMs(Math.min(Math.round(t * 1000), edlDurationMs(edl)))
-  }, [edl?.revision]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [edl?.revision])
 
   // before-unload only while dirty
   useEffect(() => {
@@ -251,13 +254,13 @@ export default function Timeline() {
     delete: deleteSelection,
   }), [tl.undo, tl.redo, ui.pps, onZoom, splitSelection, deleteSelection]), { enabled: true })
 
-  // ---- page states --------------------------------------------------------
+  // ---- page render --------------------------------------------------------
+  // The timeline opens IMMEDIATELY when a job exists, even while the pipeline
+  // is still running. Clips fill in as the editor agent writes them to the EDL.
   if (jobMissing) return <StateBlock kind="not_found" onBack={() => navigate('/studio')} />
   if (!loaded || loading) return <StateBlock kind="loading" />
-  const jobProcessing = job && !TERMINAL_OK.includes(job.status) && job.status !== 'FAILED' && !edl
-  if (jobProcessing) return <StateBlock kind={job.status === 'QUEUED' || job.status === 'PROCESSING' ? 'pipeline_running' : 'waiting_for_edl'} job={job} onBack={() => navigate('/studio')} />
   if (job?.status === 'FAILED') return <StateBlock kind="render_failed" job={job} onBack={() => navigate('/studio')} />
-  if (!edl) return <StateBlock kind="not_found" onBack={() => navigate('/studio')} />
+  if (!edl) return <StateBlock kind="waiting_for_edl" job={job} onBack={() => navigate('/studio')} />
 
   return (
     <div className="flex h-screen flex-col bg-void text-bone">
@@ -273,7 +276,7 @@ export default function Timeline() {
         </span>
         {edl?.project?.profile && (
           <span
-            className="rounded border border-white/15 px-2 py-px font-mono text-[9px] uppercase tracking-widest text-white/50"
+            className="rounded border border-white/15 px-2 font-mono text-[9px] uppercase tracking-widest text-white/50"
             data-testid="profile-label"
             title="Export profile of this cut"
           >
@@ -341,19 +344,25 @@ export default function Timeline() {
         </div>
       )}
 
+      {/* Main workspace: Asset bin | Preview+Timeline | Inspector + Telemetry */}
       <div className="flex min-h-0 flex-1">
+        {/* Left: Asset bin */}
         {!compact && <AssetBin sources={edl?.sources || []} assets={assetRows} />}
+
+        {/* Center: Preview player + Timeline */}
         <div className="flex min-w-0 flex-1 flex-col">
-          {/* preview */}
+          {/* Preview player */}
           <div className="relative aspect-video w-full max-w-xl overflow-hidden bg-black" data-testid="preview-pane">
             {tl.render?.status === 'READY' ? (
               <video ref={videoRef} src={tl.render.url} controls className="h-full w-full object-contain" />
             ) : (
-              <div className="grid h-full place-items-center font-mono text-[10px] uppercase tracking-widest2 text-white/30">
+              <div className="grid h-full place-items-center font-mono text-[10px] uppercase tracking-widest text-white/30">
                 {tl.render?.status === 'RENDERING' || tl.render?.status === 'QUEUED' ? 'rendering preview…' : 'no preview yet — render one'}
               </div>
             )}
           </div>
+
+          {/* Timeline shell + transport */}
           <TimelineShell
             edl={edl}
             playheadMs={playheadMs}
@@ -393,26 +402,31 @@ export default function Timeline() {
             onZoom={onZoom}
           />
         </div>
-        {!compact && <Inspector selectedClip={selectedClip} onChange={inspectorChange} onCaptionChange={captionChange} />}
-        {/* VITE_AGENT_ENABLED=false ships the timeline without the agent panel */}
-        {agentEnabled && (
-        <AgentTelemetryPanel
-          jobId={jobId}
-          edl={edl}
-          rows={tl.activity}
-          connected={tl.sseConnected}
-          collapsed={panelCollapsed}
-          onToggleCollapse={() => setPanelCollapsed((c) => !c)}
-          onQuickAction={quickAction}
-          onCommand={sendAgentCommand}
-          agentBusy={agent.busy}
-          selection={selectedClipIds}
-          playheadMs={playheadMs}
-          revision={revision}
-          dirty={dirty}
-          stale={staleRemote || staleLocal}
-          renderState={staleRemote ? 'stale' : tl.render?.status ? tl.render.status.toLowerCase() : 'unrendered'}
-        />
+
+        {/* Right sidebar: Inspector + Agent Telemetry stacked */}
+        {!compact && (
+          <div className="flex flex-col min-w-[300px] max-w-[420px] border-l border-white/10">
+            <Inspector selectedClip={selectedClip} onChange={inspectorChange} onCaptionChange={captionChange} />
+            {agentEnabled && (
+              <AgentTelemetryPanel
+                jobId={jobId}
+                edl={edl}
+                rows={tl.activity}
+                connected={tl.sseConnected}
+                collapsed={panelCollapsed}
+                onToggleCollapse={() => setPanelCollapsed((c) => !c)}
+                onQuickAction={quickAction}
+                onCommand={sendAgentCommand}
+                agentBusy={agent.busy}
+                selection={selectedClipIds}
+                playheadMs={playheadMs}
+                revision={revision}
+                dirty={dirty}
+                stale={staleRemote || staleLocal}
+                renderState={tl.render?.status ? tl.render.status.toLowerCase() : 'unrendered'}
+              />
+            )}
+          </div>
         )}
       </div>
     </div>

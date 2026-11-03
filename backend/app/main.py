@@ -7,7 +7,8 @@ from contextlib import asynccontextmanager
 from logging.handlers import TimedRotatingFileHandler
 import uuid
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo, timezone
 from typing import Optional, Dict, Any, List
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
@@ -632,6 +633,14 @@ async def get_ledger(job_id: str):
     ledger = JobStateService.get_ledger(job_id)
     job = JobStateService.get_job(job_id) or {}
     total = sum((c.get("cost_cents", 0.0) for c in ledger if not c.get("cached")))
+    # Serialize datetime-like objects (Firestore returns DatetimeWithNanoseconds)
+    def _jsonify(v):
+        import datetime
+        if isinstance(v, datetime.datetime):
+            return v.isoformat()
+        if hasattr(v, "isoformat"):
+            return v.isoformat()
+        return v
     return JSONResponse({"job_id": job_id, "calls": ledger, "total_cost_cents": round(total, 4),
                          "per_job_cap_cents": settings.PER_JOB_COST_CAP_CENTS})
 

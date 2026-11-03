@@ -52,16 +52,15 @@ def _probe_duration(path: str) -> float:
         return 0.0
 
 
-def subject_box(image_path: str, prompt: str = "person",
-                *, job_id: Optional[str] = None) -> Optional[Tuple[float, float, float, float]]:
+async def subject_box(image_path: str, prompt: str = "person",
+                 *, job_id: Optional[str] = None) -> Optional[Tuple[float, float, float, float]]:
     """Ask the Meta Model API (SAM 3.1 grounding prompt) for the subject box.
     Returns (x0, y0, x1, y1) normalized 0..1, or None when unavailable."""
-    import asyncio
     from app.tools.llm.call import scored_llm_json
     try:
         with open(image_path, "rb") as f:
             data = base64.b64encode(f.read()).decode("ascii")
-        res = asyncio.get_event_loop().run_until_complete(scored_llm_json(
+        res = await scored_llm_json(
             "Locate the most prominent subject matching the requested category in "
             "this frame. Reply with JSON only: "
             '{"found": <bool>, "box": [<x0>, <y0>, <x1>, <y1>]} normalized 0..1. '
@@ -70,7 +69,7 @@ def subject_box(image_path: str, prompt: str = "person",
             agent="archivist", tool="sam_reframe", job_id=job_id,
             temperature=0.0, max_output_tokens=300,
             require_keys=["found"],
-        ))
+        )
         if not res or not res.get("found"):
             return None
         box = [float(v) for v in (res.get("box") or [])]
