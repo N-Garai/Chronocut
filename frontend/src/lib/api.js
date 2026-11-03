@@ -32,13 +32,23 @@ async function request(path, init = undefined) {
 }
 
 export async function createJob(payload) {
-  // raw media files ride as media[]; a single zip legacy path keeps working
-  const form = buildForm(payload)
-  if (payload.mediaFiles?.length) {
-    form.delete('file')
-    for (const f of payload.mediaFiles) form.append('media', f, f.name)
-  }
-  return request('/jobs', { method: 'POST', body: form })
+    // raw media files ride as media[]; a single zip legacy path keeps working
+    const form = buildForm(payload)
+    if (payload.mediaFiles?.length) {
+        form.delete('file')
+        for (const f of payload.mediaFiles) form.append('media', f, f.name)
+    }
+    return request('/jobs', { method: 'POST', body: form })
+}
+
+/**
+ * Upload one or more media files to an existing job.
+ * Returns the upload response(s).
+ */
+export async function uploadFiles(jobId, files) {
+    const form = new FormData()
+    for (const f of files) form.append('media', f, f.name)
+    return request(`/jobs/${jobId}/assets`, { method: 'POST', body: form })
 }
 
 export const getJob = (jobId) => request(`/jobs/${jobId}`)
@@ -94,7 +104,7 @@ export function videoUrl(jobId, profile) {
 }
 
 export function renderedUrl(jobId, renderId) {
-  return `${API}/jobs/${jobId}/renders/${renderId}/video`
+  return `${API}/jobs/${jobId}/video?profile=${encodeURIComponent(renderId || 'youtube_landscape')}`
 }
 
 export function edlOtioUrl(jobId, revision) {

@@ -9,7 +9,7 @@ import OutputPlayer from '../components/OutputPlayer'
 import Footer from '../components/Footer'
 import ErrorBoundary from '../components/ErrorBoundary'
 import StudioPanel from '../components/Studio'
-import { createJob, getJob } from '../lib/api'
+import { createJob, getJob, renderedUrl } from '../lib/api'
 import { useJobEvents } from '../hooks/useJobEvents'
 import { useStudio } from '../studio/StudioProvider'
 
@@ -145,6 +145,18 @@ export default function Studio() {
               >
                 Open Timeline Studio →
               </button>
+              {jobOutput?.render_id && (
+                <button
+                  onClick={() => {
+                    const url = renderedUrl(activeJobId, jobOutput.render_id)
+                    window.open(url, "_blank")
+                  }}
+                  className="rounded-full border border-cyanglow px-8 py-3 font-mono text-[11px] font-bold uppercase tracking-widest2 text-cyanglow hover:bg-cyanglow/10 hover:border-cyanglow/80"
+                  data-testid="download-video"
+                >
+                  Download Final Render →
+                </button>
+              )}
             </div>
           )}
           <OutputPlayer jobOutput={jobOutput} />

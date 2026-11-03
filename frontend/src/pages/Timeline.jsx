@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Loader2 } from 'lucide-react'
+import { ArrowLeft, Loader2, Play, Pause, SkipBack, SkipForward, Maximize, Minimize } from 'lucide-react'
 import TimelineShell from '../components/timeline/TimelineShell'
 import TimelineToolbar from '../components/timeline/TimelineToolbar'
 import TransportBar from '../components/timeline/TransportBar'
 import Inspector from '../components/timeline/Inspector'
 import AssetBin from '../components/timeline/AssetBin'
+import VideoPreview from '../components/timeline/VideoPreview'
+import TextEditor from '../components/timeline/TextEditor'
 import AgentTelemetryPanel from '../components/studio/AgentTelemetryPanel'
 import { useJob } from '../hooks/useJob'
 import useTimeline from '../hooks/useTimeline'
@@ -20,19 +22,24 @@ import { assetThumbUrl, edlOtioUrl, getAssets, queueRender, waveformUrl } from '
 const TERMINAL_OK = ['COMPLETE', 'NEEDS_REVIEW']
 
 /**
- * Timeline — the `/studio/:jobId/timeline` workspace.
+ * TimelineStudio — the `/studio/:jobId/timeline` workspace.
+ *
+ * Professional video editing layout modeled after Clipchamp/CapCut:
+ *
+ *   Left:   Asset bin (media upload + existing assets)
+ *   Center: Video preview (top) + Timeline with tracks (bottom)
+ *   Right:  Inspector (clip properties) + Agent Telemetry (live agent feed)
  *
  * The timeline opens IMMEDIATELY when a job exists, even while the pipeline
  * is still running. Clips appear on the track as the editor agent creates them
  * (EDL revisions stream over SSE). Users can scrub, select, trim, split and
  * issue agent commands while the pipeline is still working.
  */
-export default function Timeline() {
+export default function TimelineStudio() {
   const { jobId } = useParams()
   const navigate = useNavigate()
   const [params] = useSearchParams()
-  // The agent telemetry panel is gated so the timeline remains usable
-  // without it (VITE_AGENT_ENABLED=false hides the panel entirely).
+
   const agentEnabled = (import.meta.env?.VITE_AGENT_ENABLED ?? 'true') !== 'false'
 
   const { job, jobMissing, loaded } = useJob(jobId)
@@ -44,8 +51,10 @@ export default function Timeline() {
   const [staleLocal, setStaleLocal] = useState(false)
   const [playing, setPlaying] = useState(false)
   const [panelCollapsed, setPanelCollapsed] = useState(() => window.innerWidth < 1280)
-  // Below 1024 px the workspace is a read-only review surface (no editing).
   const [compact, setCompact] = useState(() => window.innerWidth < 1024)
+  const [textEditorOpen, setTextEditorOpen] = useState(false)
+  const [editingClipId, setEditingClipId] = useState<string | null>(null)
+
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 1023px)')
     const onChange = () => setCompact(mq.matches)
@@ -54,19 +63,16 @@ export default function Timeline() {
     return () => mq.removeEventListener('change', onChange)
   }, [])
 
-  // uiStore persistence
   useEffect(() => { uiStore.bind(jobId) }, [jobId])
   const [ui, setUi] = useState(uiStore.state)
   useEffect(() => uiStore.subscribe(setUi), [])
 
-  // deep-link seek
   useEffect(() => {
     if (!edl) return
     const t = Number(params.get('t'))
     if (Number.isFinite(t) && t > 0) setPlayheadMs(Math.min(Math.round(t * 1000), edlDurationMs(edl)))
   }, [edl?.revision])
 
-  // before-unload only while dirty
   useEffect(() => {
     const guard = (e) => {
       if (saveStatus === 'pending' || saveStatus === 'saving') { e.preventDefault(); e.returnValue = '' }
@@ -75,11 +81,8 @@ export default function Timeline() {
     return () => window.removeEventListener('beforeunload', guard)
   }, [saveStatus])
 
-  // selection cleared on job change
   useEffect(() => { setSelectedClipIds([]); setStaleLocal(false) }, [jobId])
 
-  // asset bin metadata (thumbnails + on-disk availability); never blocks the
-  // timeline — a failure just falls back to the EDL source list.
   const [assetRows, setAssetRows] = useState([])
   useEffect(() => {
     let alive = true
@@ -90,7 +93,6 @@ export default function Timeline() {
     return () => { alive = false }
   }, [jobId, revision])
 
-  // Per-clip previews: a waveform for audio sources, a still for images/video.
   const { waveforms, thumbs } = useMemo(() => {
     const w = {}
     const t = {}
@@ -109,7 +111,6 @@ export default function Timeline() {
   const dirty = saveStatus === 'pending' || saveStatus === 'saving'
   const staleRemote = tl.remoteUpdate || (revision != null && tl.renderedRevision != null && tl.renderedRevision < revision)
 
-  // ---- command path (manual + agent share execute) ------------------------
   const runBatch = useCallback((ops) => {
     const ok = tl.execute(cmdBatch(ops))
     if (ok) setStaleLocal(true)
@@ -146,10 +147,8 @@ export default function Timeline() {
     runBatch([{ op: 'move', args: { clip_id: clipId, to: Math.max(0, Number(clip.start) + deltaMs / 1000) } }])
   }, [findClip, runBatch])
 
-  // ---- agent path ---------------------------------------------------------
+  // Agent planner
   const agent = useAgent(jobId, { playheadMs, selectedClipIds })
-  // A destructive plan is held here until the user confirms it; nothing is
-  // written to the EDL before that, so cancelling leaves the draft untouched.
   const [pendingAgentPlan, setPendingAgentPlan] = useState(null)
   const sendAgentCommand = useCallback(async (message) => {
     setPendingAgentPlan(null)
@@ -193,18 +192,18 @@ export default function Timeline() {
     }
   }, [selectedClipIds, playheadMs, runBatch, deleteSelection, findClip])
 
-  // inspector
   const selectedClip = selectedClipIds.map(findClip).find(Boolean) || null
+
   const inspectorChange = useCallback((clipId, op, args) => {
     if (op === 'set_effect') runBatch([{ op: 'set_effect', args: { clip_id: clipId, ...args } }])
     if (op === 'set_speed') runBatch([{ op: 'set_speed', args: { clip_id: clipId, value: args.value } }])
+    if (op === 'set_caption') runBatch([{ op: 'update_caption', args: { clip_id: clipId, text: args.text } }])
   }, [runBatch])
 
   const captionChange = useCallback((clipId, text) => {
     runBatch([{ op: 'update_caption', args: { clip_id: clipId, text } }])
   }, [runBatch])
 
-  // preview render + otio export
   const renderPreview = useCallback(async () => {
     setStaleLocal(false)
     try { await queueRender(jobId, { revision, profile: 'preview_480', kind: 'preview' }) } catch { /* surfaced via telemetry */ }
@@ -214,7 +213,7 @@ export default function Timeline() {
     window.open(edlOtioUrl(jobId), '_blank')
   }, [jobId])
 
-  // playback preview (video element in preview pane)
+  // Video playback
   const videoRef = useRef(null)
   useEffect(() => {
     if (!playing || !tl.render?.url) return
@@ -240,7 +239,6 @@ export default function Timeline() {
 
   const onZoom = useCallback((pps) => uiStore.set({ pps: Math.min(200, Math.max(10, pps)) }), [])
 
-  // keyboard shortcuts
   useTimelineShortcuts(useMemo(() => ({
     undo: () => tl.undo(),
     redo: () => tl.redo(),
@@ -254,9 +252,7 @@ export default function Timeline() {
     delete: deleteSelection,
   }), [tl.undo, tl.redo, ui.pps, onZoom, splitSelection, deleteSelection]), { enabled: true })
 
-  // ---- page render --------------------------------------------------------
-  // The timeline opens IMMEDIATELY when a job exists, even while the pipeline
-  // is still running. Clips fill in as the editor agent writes them to the EDL.
+  // Render
   if (jobMissing) return <StateBlock kind="not_found" onBack={() => navigate('/studio')} />
   if (!loaded || loading) return <StateBlock kind="loading" />
   if (job?.status === 'FAILED') return <StateBlock kind="render_failed" job={job} onBack={() => navigate('/studio')} />
@@ -264,7 +260,7 @@ export default function Timeline() {
 
   return (
     <div className="flex h-screen flex-col bg-void text-bone">
-      {/* header */}
+      {/* Header */}
       <header className="flex items-center gap-3 border-b border-white/10 px-4 py-2">
         <button onClick={() => navigate('/studio')} className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-widest2 text-white/60 hover:text-amberglow">
           <ArrowLeft size={12} /> studio
@@ -275,52 +271,25 @@ export default function Timeline() {
           {saveStatus === 'saving' ? 'saving…' : saveStatus === 'conflict' ? `conflict: server r${conflict}` : saveStatus === 'error' ? 'save failed (retry on next edit)' : `r${revision ?? '–'}`}
         </span>
         {edl?.project?.profile && (
-          <span
-            className="rounded border border-white/15 px-2 font-mono text-[9px] uppercase tracking-widest text-white/50"
-            data-testid="profile-label"
-            title="Export profile of this cut"
-          >
-            {edl.project.profile}
-          </span>
+          <span className="rounded border border-white/15 px-2 font-mono text-[9px] uppercase tracking-widest text-white/50" data-testid="profile-label">{edl.project.profile}</span>
         )}
         {(saveStatus === 'conflict' || tl.remoteUpdate) && (
-          <button
-            onClick={() => { tl.reloadServer(); }}
-            data-testid="conflict-reload"
-            className="rounded-full bg-amberglow px-3 py-1 font-mono text-[9px] font-bold uppercase tracking-widest text-void"
-          >
+          <button onClick={() => tl.reloadServer()} data-testid="conflict-reload" className="rounded-full bg-amberglow px-3 py-1 font-mono text-[9px] font-bold uppercase tracking-widest text-void">
             {tl.remoteUpdate ? 'AI updated the cut — load it' : 'reload server cut'}
           </button>
         )}
-        {tl.previewStale && (
-          <span className="status-chip border border-amber-400/40 bg-amber-400/10 text-amber-400" data-testid="stale-badge">preview stale</span>
-        )}
-        {!tl.sseConnected && (
-          <span className="status-chip border border-red-400/30 bg-red-400/10 text-red-400">reconnecting…</span>
-        )}
+        {tl.previewStale && <span className="status-chip border border-amber-400/40 bg-amber-400/10 text-amber-400" data-testid="stale-badge">preview stale</span>}
+        {!tl.sseConnected && <span className="status-chip border border-red-400/30 bg-red-400/10 text-red-400">reconnecting…</span>}
         {pendingAgentPlan && (
           <span className="ml-auto flex items-center gap-2 rounded border border-amber-400/40 bg-amber-400/10 px-2 py-1" data-testid="agent-confirm">
-            <span className="font-mono text-[9px] uppercase tracking-widest text-amber-300">
-              {pendingAgentPlan.operations?.length || 0} ops · confirm destructive edit
-            </span>
-            <button
-              onClick={confirmAgentPlan}
-              className="rounded bg-amberglow px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-void"
-              data-testid="agent-confirm-apply"
-            >
-              apply
-            </button>
-            <button
-              onClick={cancelAgentPlan}
-              className="rounded border border-white/20 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-white/60 hover:text-white"
-              data-testid="agent-confirm-cancel"
-            >
-              cancel
-            </button>
+            <span className="font-mono text-[9px] uppercase tracking-widest text-amber-300">{pendingAgentPlan.operations?.length || 0} ops · confirm destructive edit</span>
+            <button onClick={confirmAgentPlan} className="rounded bg-amberglow px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-void" data-testid="agent-confirm-apply">apply</button>
+            <button onClick={cancelAgentPlan} className="rounded border border-white/20 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-white/60 hover:text-white" data-testid="agent-confirm-cancel">cancel</button>
           </span>
         )}
       </header>
 
+      {/* Timeline toolbar */}
       <TimelineToolbar
         selection={selectedClipIds}
         playheadMs={playheadMs}
@@ -338,38 +307,38 @@ export default function Timeline() {
         stale={staleRemote || staleLocal}
       />
 
+      {/* Read-only banner */}
       {compact && (
         <div className="border-y border-amberglow/25 bg-amberglow/[0.07] px-4 py-1.5 text-center font-mono text-[9px] uppercase tracking-widest text-amberglow/80" data-testid="readonly-banner">
           read-only review on this screen — open on a wider screen to edit
         </div>
       )}
 
-      {/* Main workspace: Asset bin | Preview+Timeline | Inspector + Telemetry */}
+      {/* Main workspace */}
       <div className="flex min-h-0 flex-1">
         {/* Left: Asset bin */}
-        {!compact && <AssetBin sources={edl?.sources || []} assets={assetRows} />}
+        {!compact && <AssetBin sources={edl?.sources || []} assets={assetRows} jobId={jobId} onSelect={(id) => setSelectedClipIds([id])} />}
 
-        {/* Center: Preview player + Timeline */}
-        <div className="flex min-w-0 flex-1 flex-col">
-          {/* Preview player */}
+        {/* Center: Preview + Timeline */}
+        <div className="flex min-w-0 flex-1">
           <div className="relative aspect-video w-full max-w-xl overflow-hidden bg-black" data-testid="preview-pane">
-            {tl.render?.status === 'READY' ? (
-              <video ref={videoRef} src={tl.render.url} controls className="h-full w-full object-contain" />
-            ) : (
-              <div className="grid h-full place-items-center font-mono text-[10px] uppercase tracking-widest text-white/30">
-                {tl.render?.status === 'RENDERING' || tl.render?.status === 'QUEUED' ? 'rendering preview…' : 'no preview yet — render one'}
-              </div>
-            )}
+            <VideoPreview
+              src={tl.render?.url || null}
+              playheadMs={playheadMs}
+              durationMs={edlDurationMs(edl)}
+              playing={playing}
+              setPlayheadMs={setPlayheadMs}
+              setPlaying={setPlaying}
+            />
           </div>
 
-          {/* Timeline shell + transport */}
           <TimelineShell
             edl={edl}
             playheadMs={playheadMs}
             previewPlayheadMs={previewPlayhead}
             pps={ui.pps}
             selectedClipIds={selectedClipIds}
-            diff={tl.diff?.added?.length || tl.diff?.changed?.length || tl.diff?.removed?.length ? tl.diff : null}
+            diff={tl.diff}
             snapping={ui.snapping}
             ripple={ui.ripple}
             readOnly={compact}
@@ -377,14 +346,8 @@ export default function Timeline() {
             thumbs={thumbs}
             onSeek={onSeek}
             onZoom={onZoom}
-            onSelectMany={(ids, { additive } = {}) => {
-              setSelectedClipIds((prev) => additive
-                ? [...new Set([...prev, ...ids])]
-                : ids)
-            }}
-            onClipSelect={(id, { additive } = {}) => {
-              setSelectedClipIds((prev) => additive ? (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]) : [id])
-            }}
+            onSelectMany={(ids, { additive } = {}) => setSelectedClipIds((prev) => additive ? [...new Set([...prev, ...ids])] : ids)}
+            onClipSelect={(id, { additive } = {}) => setSelectedClipIds((prev) => additive ? (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]) : [id])}
             onTrimCommit={compact ? undefined : onTrimCommit}
             onDragCommit={compact ? undefined : onDragCommit}
           />
@@ -403,10 +366,14 @@ export default function Timeline() {
           />
         </div>
 
-        {/* Right sidebar: Inspector + Agent Telemetry stacked */}
+        {/* Right sidebar: Inspector + Agent Telemetry */}
         {!compact && (
           <div className="flex flex-col min-w-[300px] max-w-[420px] border-l border-white/10">
-            <Inspector selectedClip={selectedClip} onChange={inspectorChange} onCaptionChange={captionChange} />
+            <Inspector
+              selectedClip={selectedClip}
+              onChange={inspectorChange}
+              onCaptionChange={captionChange}
+            />
             {agentEnabled && (
               <AgentTelemetryPanel
                 jobId={jobId}
@@ -429,15 +396,21 @@ export default function Timeline() {
           </div>
         )}
       </div>
+
+      {/* Text editor overlay */}
+      {textEditorOpen && selectedClip && (
+        <TextEditor
+          clip={selectedClip}
+          onChange={inspectorChange}
+          onClose={() => setTextEditorOpen(false)}
+        />
+      )}
     </div>
   )
 }
 
 function usePlayhead() {
-  const [playheadMs, setPlayheadMs] = useState(() => {
-    // initialized by the deep-link effect once the router provides params
-    return 0
-  })
+  const [playheadMs, setPlayheadMs] = useState(0)
   const [previewPlayhead, setPreviewPlayhead] = useState(null)
   return { playheadMs, setPlayheadMs, previewPlayhead, setPreviewPlayhead }
 }

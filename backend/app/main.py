@@ -541,7 +541,7 @@ def _json(obj) -> str:
 
 
 @app.get("/api/v1/jobs/{job_id}/video")
-async def get_video(job_id: str, profile: Optional[str] = None, request: Request = None):
+async def get_video(job_id: str, profile: Optional[str] = None, request: Request = None, download: Optional[str] = None):
     job = JobStateService.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -553,7 +553,10 @@ async def get_video(job_id: str, profile: Optional[str] = None, request: Request
     path = paths.get(key) or next(iter(paths.values()))
     if not path or not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Video file missing")
-    return _serve_file_range(request, path, media_type="video/mp4")
+    headers = {}
+    if download:
+        headers["Content-Disposition"] = f'attachment; filename="{job_id}.mp4"'
+    return _serve_file_range(request, path, media_type="video/mp4", headers=headers)
 
 
 @app.get("/api/v1/jobs/{job_id}/assets")
@@ -653,7 +656,7 @@ async def get_review(job_id: str):
     return JSONResponse(job.get("review_report", {}))
 
 
-def _serve_file_range(request, path: str, media_type: str = "application/octet-stream"):
+def _serve_file_range(request, path: str, media_type: str = "application/octet-stream", headers: Optional[Dict[str, str]] = None):
     size = os.path.getsize(path)
     range_header = (request.headers.get("range") if request else None) or ""
     start, end = 0, size - 1
@@ -668,12 +671,13 @@ def _serve_file_range(request, path: str, media_type: str = "application/octet-s
     with open(path, "rb") as f:
         f.seek(start)
         data = f.read(length)
-    headers = {
+    headers = headers or {}
+    headers.update({
         "Content-Range": f"bytes {start}-{end}/{size}",
         "Accept-Ranges": "bytes",
         "Content-Length": str(length),
         "Content-Type": media_type,
-    }
+    })
     return Response(content=data, status_code=206 if range_header else 200, headers=headers)
 
 

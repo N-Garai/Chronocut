@@ -1,76 +1,190 @@
-import { Home, ImageIcon, Music, Film, FileArchive, MonitorPlay } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { Image, Film, Music, Plus, Upload, Search, X } from 'lucide-react'
+import { uploadFiles } from '../../lib/api'
 
 /**
- * AssetBin — job sources from the EDL, enriched with the asset endpoint's
- * thumbnails and on-disk availability. A source with no preview row still
- * renders (icon + name), so the bin never depends on the extra metadata.
- * The panel rail also carries the only navigation out of the editor, so the
- * workspace itself stays distraction-free like a full-screen editing suite.
+ * AssetBin — media library panel. Shows uploaded assets (videos, images,
+ * audio) with thumbnails. Supports drag-and-drop upload of new media.
+ *
+ * Assets are passed in as `sources` (from EDL) plus newly uploaded files.
+ * Clicking an asset selects it for the timeline (onSelect callback).
  */
-export default function AssetBin({ sources, assets = [], onSelect }) {
-  const navigate = useNavigate()
-  const icons = { image: ImageIcon, audio: Music, narration: Music, music: Music, video: Film }
-  const byId = new Map((assets || []).map((a) => [String(a.asset_id || a.id), a]))
+export default function AssetBin({
+  sources = [],
+  assets = [],
+  onSelect,
+  jobId,
+}) {
+  const [dragOver, setDragOver] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [search, setSearch] = useState('')
+
+  const handleDrop = async (e) => {
+    e.preventDefault()
+    setDragOver(false)
+    const files = Array.from(e.dataTransfer.files)
+    if (files.length === 0) return
+    setUploading(true)
+    try {
+        await uploadFiles(jobId, files)
+    } catch (err) {
+        console.error('Upload failed:', err)
+    }
+    setUploading(false)
+  }
+
+  const handleDragEnter = (e) => {
+    e.preventDefault()
+    setDragOver(true)
+  }
+
+  const handleDragLeave = (e) => {
+    e.preventDefault()
+    setDragOver(false)
+  }
+
+  const filteredAssets = assets.filter((a) => {
+    const name = String(a.name || a.id || '').toLowerCase()
+    return name.includes(search.toLowerCase())
+  })
 
   return (
-    <aside className="flex h-full flex-col gap-2 overflow-y-auto border-r border-white/10 bg-carbon/40 p-3" data-lenis-prevent="true">
-      <div className="mb-1 flex gap-1.5">
-        <button
-          onClick={() => navigate('/')}
-          className="flex flex-1 items-center justify-center gap-1.5 rounded border border-white/10 bg-white/[0.03] px-2 py-1.5 font-mono text-[9px] uppercase tracking-widest text-white/60 transition-colors hover:border-amberglow/60 hover:text-amberglow"
-          title="Back to the ChronoCut home page"
-        >
-          <Home size={12} /> home
-        </button>
-        <button
-          onClick={() => navigate('/studio')}
-          className="flex flex-1 items-center justify-center gap-1.5 rounded border border-white/10 bg-white/[0.03] px-2 py-1.5 font-mono text-[9px] uppercase tracking-widest text-white/60 transition-colors hover:border-amberglow/60 hover:text-amberglow"
-          title="Back to the studio"
-        >
-          <MonitorPlay size={12} /> studio
-        </button>
+    <div className="flex h-full flex-col border-r border-white/10 bg-carbon">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-white/10 px-3 py-2 bg-black/10">
+        <div className="flex items-center gap-2">
+          <Film size={14} className="text-cyanglow" />
+          <span className="font-mono text-[10px] uppercase tracking-widest text-white/70">Assets</span>
+        </div>
+        <div className="relative w-24">
+          <input
+            type="text"
+            placeholder="Search assets…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full rounded border border-white/10 bg-white/[0.04] px-2 py-1 font-mono text-[10px] text-bone placeholder-white/25 outline-none focus:border-cyanglow/60"
+          />
+          {search && (
+            <button
+              onClick={() => setSearch('')}
+              className="absolute right-2 top-1/2 -mt-1 text-white/40 hover:text-white"
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
       </div>
-      <span className="font-mono text-[10px] uppercase tracking-widest text-white/50">assets ({sources.length})</span>
-      {sources.length === 0 && (
-        <p className="font-mono text-[10px] leading-relaxed text-white/35">
-          Sources appear here once the pipeline ingests the media for this job.
-        </p>
+
+      {/* Drag overlay */}
+      {dragOver && (
+        <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-10">
+          <div className="flex flex-col items-center gap-2 rounded-lg border-2 border-dashed border-white/30 bg-black/50 p-6">
+            <Upload size={24} className="text-cyanglow" />
+            <p className="text-cyanglow font-mono text-[10px] uppercase tracking-widest">Drop files to upload</p>
+          </div>
+        </div>
       )}
-      {sources.map((s) => {
-        const row = byId.get(String(s.id)) || null
-        const Icon = icons[s.type] || FileArchive
-        const offline = row ? !row.available : false
-        return (
-          <button
-            key={s.id}
-            onClick={() => onSelect?.(s.id)}
-            className="flex items-center gap-2 rounded border border-white/10 bg-white/[0.03] px-2 py-1.5 text-left hover:border-cyanglow/50"
-            title={offline ? `${s.path} (not on this host)` : s.path}
-          >
-            {row?.thumb ? (
-              <img src={row.thumb} alt="" className="h-6 w-10 shrink-0 rounded object-cover opacity-90" loading="lazy" />
-            ) : (
-              <Icon
-                size={14}
-                className={
-                  s.type === 'audio' || s.type === 'narration' || s.type === 'music'
-                    ? 'text-emerald-400'
-                    : s.type === 'video' ? 'text-cyanglow' : 'text-amberglow'
-                }
-              />
-            )}
-            <span className="min-w-0 flex-1">
-              <span className="block truncate font-mono text-[9px] uppercase tracking-widest text-white/60">{s.id}</span>
-              <span className="block truncate font-mono text-[8px] text-white/30">{s.path?.split(/[\\/]/).pop() || s.type}</span>
-            </span>
-            {s.duration != null && (
-              <span className="font-mono text-[9px] text-white/40">{Number(s.duration).toFixed(1)}s</span>
-            )}
-            {offline && <span className="font-mono text-[8px] uppercase tracking-widest text-amberglow/70">n/a</span>}
-          </button>
-        )
-      })}
-    </aside>
+
+      {/* Asset grid */}
+      <div className="flex-1 overflow-y-auto p-2 space-y-2">
+        {filteredAssets.length === 0 && (
+          <div className="flex h-full flex-col items-center justify-center pt-16 text-center">
+            <Upload size={32} className="text-white/20" />
+            <p className="mt-2 font-mono text-[10px] text-white/40">No media yet</p>
+            <button
+              onClick={() => document.getElementById('asset-file-input')?.click()}
+              className="mt-2 rounded border border-white/20 px-3 py-1 font-mono text-[10px] text-white/70 hover:bg-white/10"
+            >
+              Browse files
+            </button>
+          </div>
+        )}
+        <div className="grid grid-cols-1 gap-2">
+          {filteredAssets.map((asset) => (
+            <AssetCard
+              key={asset.id}
+              asset={asset}
+              selected={selectedAssetId === asset.id}
+              onSelect={() => onSelect?.(asset.id)}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Hidden file input */}
+      <input
+        id="asset-file-input"
+        type="file"
+        multiple
+        hidden
+        onChange={async (e) => {
+          const files = Array.from(e.target.files || [])
+          setUploading(true)
+          try {
+            await uploadFiles(jobId, files)
+          } catch (err) {
+            console.error('Upload failed:', err)
+          }
+          setUploading(false)
+          setTimeout(() => setUploading(false), 500)
+        }}
+      />
+    </div>
+  )
+}
+
+const AssetCard = ({ asset, onSelect, selected }) => {
+  const id = String(asset.id || asset.name || '')
+  const name = String(asset.name || id)
+  const kind = String(asset.kind || '').toLowerCase()
+  const thumb = asset.thumb
+  const isVideo = kind === 'video' || ['mp4', 'mov', 'avi', 'mkv'].some((e) => name.toLowerCase().endsWith('.' + e))
+  const isImage = ['jpg', 'jpeg', 'png', 'webp', 'gif'].some((e) => name.toLowerCase().endsWith('.' + e))
+  const isAudio = ['mp3', 'wav', 'aac', 'ogg'].some((e) => name.toLowerCase().endsWith('.' + e))
+
+  const thumbUrl = thumb ? `${thumb}` : null
+  const isSelected = selected === id
+
+  const getIcon = () => {
+    if (isVideo) return <Film size={20} className="text-amberglow" />
+    if (isImage) return <Image size={20} className="text-cyanglow" />
+    if (isAudio) return <Music size={20} className="text-emerald-400" />
+    return <Plus size={20} className="text-white/40" />
+  }
+
+  return (
+    <div
+      className={`relative group rounded border border-white/10 bg-white/[0.02] hover:border-cyanglow/60 hover:bg-amberglow/5 transition-all cursor-pointer`}
+      onClick={() => onSelect(id)}
+      data-testid={`asset-${id}`}
+    >
+      <div className="aspect-video overflow-hidden rounded-t-md bg-black">
+        {thumbUrl ? (
+          <img
+            src={thumbUrl}
+            alt={name}
+            className="absolute inset-0 w-full h-full object-cover"
+            loading="lazy"
+          />
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+            {getIcon()}
+          </div>
+        )}
+        <div className="absolute top-1 right-1 z-10 flex flex-col gap-1">
+          <span className="text-[8px] font-mono text-white/60 bg-black/50 px-1 rounded">
+            {kind.charAt(0).toUpperCase() + kind.slice(1)}
+          </span>
+        </div>
+      </div>
+      <div className="px-1 py-1">
+        <span className="block font-mono text-[9px] uppercase tracking-widest text-white/70 truncate" title={name}>
+          {name}
+        </span>
+        <span className="block font-mono text-[8px] text-white/40 truncate">
+          {asset.size ? `${Math.round(Number(asset.size) / 1024)} KB` : ''}
+        </span>
+      </div>
+    </div>
   )
 }
