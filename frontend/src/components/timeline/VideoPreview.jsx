@@ -1,9 +1,9 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
-import { Play, Pause, Volume2, VolumeOff, Maximize, Minimize, SkipBack, SkipForward, Download } from 'lucide-react'
+import { Play, Pause, Volume2, VolumeOff, Maximize, Minimize, SkipBack, SkipForward } from 'lucide-react'
 
 /**
  * VideoPreview — professional video preview pane with playback controls.
- * Mirrors Clipchamp/DaVinci style preview: video fills the pane, transport
+ * Mirrors Clipchamp/CapCut style preview: video fills the pane, transport
  * controls float at bottom-center, scrubber shows playhead position.
  *
  * Accepts a video URL (from /api/v1/jobs/:id/video?profile=...) and mirrors
@@ -25,7 +25,14 @@ export default function VideoPreview({
   const [isHovered, setIsHovered] = useState(false)
   const [isMuted, setIsMuted] = useState(false)
   const [volume, setVolume] = useState(1.0)
-  const [showControls, setShowControls] = useState(false)
+  const [error, setError] = useState(false)
+  const [loaded, setLoaded] = useState(false)
+
+  // Reset error/loaded state when src changes
+  useEffect(() => {
+    setError(false)
+    setLoaded(false)
+  }, [src])
 
   // Sync video currentTime with playheadMs
   useEffect(() => {
@@ -57,19 +64,33 @@ export default function VideoPreview({
     }
   }, [playing])
 
+  const handleLoad = () => setLoaded(true)
+  const handleError = () => {
+    setError(true)
+    setPlaying(false)
+  }
+
   const handleSeek = (e) => {
-    const rect = videoRef.current.getBoundingClientRect()
+    const v = videoRef.current
+    if (!v) return
+    const rect = v.getBoundingClientRect()
     const x = e.clientX - rect.left
     const pct = Math.max(0, Math.min(1, x / rect.width))
     const ms = Math.round(pct * durationMs)
     setPlayheadMs(ms)
-    if (videoRef.current) videoRef.current.currentTime = ms / 1000
+    v.currentTime = ms / 1000
   }
 
   const handlePlayPause = () => {
+    const v = videoRef.current
+    if (!v) return
     setPlaying((p) => {
       const next = !p
-      videoRef.current?.[next ? 'play' : 'pause']().catch(() => {})
+      if (next) {
+        v.play().catch(() => setPlaying(false))
+      } else {
+        v.pause()
+      }
       return next
     })
   }
@@ -79,26 +100,59 @@ export default function VideoPreview({
       {/* Video element */}
       <video
         ref={videoRef}
-        src={src}
-        className="h-full w-full object-contain bg-black"
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
-        onClick={handlePlayPause}
-        onClickCapture={(e) => e.stopPropagation()}
-        crossOrigin="anonymous"
+        src={src || ''}
         playsInline
+        preload="metadata"
+        onLoadedMetadata={handleLoad}
+        onError={handleError}
+        onClick={handlePlayPause}
+        style={{ pointerEvents: error ? 'none' : 'auto' }}
       />
+      {/* Error overlay */}
+      {error && !loaded && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-16 h-16 rounded-full border-4 border-white/20 border-t-cyanglow animate-spin">
+              <div className="w-full h-full border-t-cyanglow" />
+            </div>
+            <p className="text-white text-sm font-mono">Loading video…</p>
+          </div>
+        </div>
+      )}
+      {/* Error state */}
+      {error && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80">
+          <div className="flex flex-col items-center gap-2">
+            <div className="w-16 h-16 rounded-full border-4 border-red-500/50 border-t-red-500 animate-spin">
+              <div className="w-full h-full border-t-red-500" />
+            </div>
+            <p className="text-red-400 text-sm font-mono">Unable to load video</p>
+            <button
+              onClick={() => {
+                setError(false)
+                setPlaying(false)
+                if (videoRef.current) videoRef.current.src = src
+                videoRef.current?.load()
+              }}
+              className="px-4 py-1 bg-red-500/20 text-red-400 border border-red-500/50 rounded hover:bg-red-500/40"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      )}
       {/* Click-to-seek overlay */}
-      <div
-        className="absolute inset-0 cursor-pointer"
-        onClick={handleSeek}
-        style={{ pointerEvents: playing ? 'none' : 'auto' }}
-      />
+      {!error && (
+        <div className="absolute inset-0 cursor-pointer"
+          onClick={handleSeek}
+          style={{ pointerEvents: playing ? 'none' : 'auto' }}
+        />
+      )}
       {/* Play/pause overlay when not playing */}
-      {!playing && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/40" onClick={(e) => e.stopPropagation()}>
+      {!error && !playing && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/40" onClick={handlePlayPause}>
           <button
-            onClick={handlePlayPause}
+            onClick={(e) => e.stopPropagation()}
             className="rounded-full bg-white/20 px-4 py-3 text-white/90 hover:bg-white/30"
             aria-label="Play"
           >
@@ -107,7 +161,7 @@ export default function VideoPreview({
         </div>
       )}
       {/* Transport controls overlay (visible on hover) */}
-      {isHovered || playing === false && (
+      {!error && (
         <div className="absolute inset-x-0 bottom-0 flex items-end px-4 py-3">
           {/* Transport controls */}
           <div className="flex items-center gap-2 bg-black/60 backdrop-blur-sm rounded-b-lg px-3 py-2 border-t border-white/10">
@@ -116,7 +170,7 @@ export default function VideoPreview({
               className="rounded-full p-2 text-white/80 hover:bg-white/20 hover:text-white transition-colors"
               title={playing ? 'Pause' : 'Play'}
             >
-              {playing ? <Pause size={18} /> : <Play size={18} />}
+              {playing ? <Pause size={18} /> : <Play size={48} />}
             </button>
             <button
               onClick={() => onSeek?.(Math.max(0, playheadMs - 1000), { preview: false })}
@@ -130,7 +184,7 @@ export default function VideoPreview({
               className="rounded p-1 text-white/60 hover:bg-white/10 hover:text-white"
               title="Forward 1s"
             >
-              <SkipRight size={14} />
+              <SkipForward size={14} />
             </button>
             {/* Volume */}
             <button
@@ -160,18 +214,6 @@ export default function VideoPreview({
               title="Fullscreen"
             >
               <Maximize size={14} />
-            </button>
-            {/* Download */}
-            <button
-              onClick={() => {
-                const srcUrl = src
-                const url = srcUrl.includes("?") ? `${srcUrl}&download=1` : `${srcUrl}?download=1`
-                window.open(url, "_blank")
-              }}
-              className="rounded p-1 text-white/60 hover:bg-white/10 hover:text-white"
-              title="Download video"
-            >
-              <Download size={14} />
             </button>
           </div>
           {/* Time scrubber */}

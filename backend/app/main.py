@@ -552,7 +552,9 @@ async def get_video(job_id: str, profile: Optional[str] = None, request: Request
     key = profile or editor.get("primary_profile") or next(iter(paths))
     path = paths.get(key) or next(iter(paths.values()))
     if not path or not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Video file missing")
+        raise HTTPException(status_code=404, detail="Video file not found yet")
+    if not os.path.getsize(path):
+        raise HTTPException(status_code=404, detail="Video file is empty")
     headers = {}
     if download:
         headers["Content-Disposition"] = f'attachment; filename="{job_id}.mp4"'
