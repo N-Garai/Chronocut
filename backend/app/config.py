@@ -176,17 +176,6 @@ class Settings(BaseSettings):
     IMAGE_GEN_MAX_PER_JOB: int = Field(default=6)
     IMAGE_GEN_DAILY_IMAGES: int = Field(default=60)  # controlled spend from free credits
 
-    # ---- Generated B-roll video (optional, default off) ----------------------
-    # Local open-weights text-to-video via diffusers, run in a child process.
-    # Off by default: a video model needs gigabytes of RAM/VRAM and minutes per
-    # clip. When enabled it fills shots no stock provider could cover, before
-    # the matte fallback, and is capped per job with a hard wall-clock timeout.
-    VIDEO_GEN_PROVIDER: str = Field(default="off")  # off | local
-    VIDEO_GEN_MODEL: str = Field(default="Wan-AI/Wan2.1-T2V-1.3B")
-    VIDEO_GEN_MAX_SECONDS: int = Field(default=4)
-    VIDEO_GEN_MAX_PER_JOB: int = Field(default=3)
-    VIDEO_GEN_TIMEOUT_SECONDS: int = Field(default=900)
-
     # Load backend/.env first, then the repo-root .env; later files win
     # conflicts, so the root .env (the one actually maintained/edited) overrides
     # any stale backend-local copy. uvicorn runs from backend/, where a bare
@@ -252,11 +241,6 @@ class Settings(BaseSettings):
     def image_gen_provider(self) -> str:
         p = (self.IMAGE_GEN_PROVIDER or "off").strip().lower()
         return p if p in ("off", "muse") else "off"
-
-    @property
-    def video_gen_provider(self) -> str:
-        p = (self.VIDEO_GEN_PROVIDER or "off").strip().lower()
-        return p if p in ("off", "local") else "off"
 
     @property
     def render_dispatcher(self) -> str:

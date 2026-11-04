@@ -1,0 +1,34 @@
+%% ChronoCut model governance & failover chain — verified against
+%% backend/app/tools/llm/{call.py,provider.py} and app/config.py.
+flowchart LR
+    AGENT(["Any agent or sub-agent call:<br/>scored_llm_call / scored_llm_json"]) --> CACHE
+
+    CACHE{"LLM cache hit?<br/>(system+prompt+temp+model+media hash)"}
+    CACHE -->|hit| LIVE2[("record_call<br/>cached row, cost 0")]
+    CACHE -->|miss| GOV
+
+    GOV["Governor:<br/>rate limiter acquire +<br/>budget check (PER_JOB_COST_CAP_CENTS)"] --> COAL{"In-flight coalesce<br/>same cache_key?"}
+    COAL -->|share result| LIVE2
+    COAL -->|new| PRIMARY
+
+    PRIMARY["Meta Model API (api.meta.ai/v1)<br/>muse-spark-1.3<br/>+ in-family retry: 1.2 then 1.1"]
+    FAIL{"call failed?"}
+    PRIMARY --> FAIL
+
+    FAIL -->|"no"| LEAD[("ledger + telemetry row:<br/>provider + model + tokens + cost")]
+    FAIL -->|yes| CHAIN{"ENABLE_LLM_FAILOVER<br/>and any slot configured?"}
+
+    CHAIN -->|"no / all exhausted"| TEMPLATES["Deterministic templates<br/>(planner-director owned fallback)"]
+    CHAIN -->|yes| OR["OpenRouter<br/>meta/muse-spark-open<br/>(provider rates)"]
+    OR -->|"openrouter failed"| BT["Baseten<br/>meta-models/muse-spark-open"]
+    BT -->|"baseten failed"| LOCAL["Local OpenAI-compatible<br/>meta-models/Muse-Glimmer-30B"]
+    LOCAL -->|"local failed"| TEMPLATES
+
+    OR -.->|"first ready hop answers"| LEAD2[("honest telemetry row:<br/>provider: openrouter /<br/>baseten / local<br/>metered at muse rates; local is free")]
+    OR -.-> LEAD2
+    BT -.-> LEAD2
+    LOCAL -.-> LEAD2
+
+    TEMPLATES --> AGENTOUT(["agent receives text<br/>(narrative JSON tolerated by caller parsing)"])
+    LEAD --> AGENTOUT
+    LEAD2 --> AGENTOUT

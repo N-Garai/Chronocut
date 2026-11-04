@@ -1,0 +1,38 @@
+%% ChronoCut render dispatch sequence — verified against app/api/timeline.py,
+%% app/services/renders.py, app/workers/render_worker.py and
+%% .github/workflows/render-worker.yml.
+sequenceDiagram
+    autonumber
+    participant U as Timeline UI<br/>(Cloudflare Pages)
+    participant API as FastAPI API<br/>(timeline.py /render)
+    participant FS as Firestore<br/>(renders collection)
+    participant GH as GitHub API<br/>repository_dispatch
+    participant WF as Actions worker<br/>(render-worker.yml)
+    participant RW as render_worker.py<br/>(ffmpeg)
+    participant SB as Supabase Storage<br/>bucket "renders"
+
+    U->>API: POST /api/v1/jobs/{job_id}/render {profile, kind}
+    API->>FS: create_render(job_id, revision, profile) -> render doc PENDING
+    alt default dispatcher = actions (GH_REPO + GH_DISPATCH_TOKEN present)
+        API->>GH: POST /repos/{GH_REPO}/dispatches<br/>event_type "chronocut-render"<br/>client_payload {job_id, render_id, revision, profile}
+        GH->>WF: trigger "Render worker" run
+    else dispatcher = local (no GH config)
+        API->>API: run local render_job in-process
+    end
+    WF->>WF: checkout + python 3.11 + ffmpeg<br/>pip install backend/requirements.txt<br/>(optional MMS-TTS HF cache warm)
+    WF->>RW: python -m app.workers.render_worker --render-id {id}
+    RW->>FS: get_render (skip if already READY)
+    RW->>FS: get EDL revision (app.edl.store.get_revision)
+    RW->>FS: mark_status RENDERING
+    RW->>RW: render_edl -> {profile}.mp4 + write_otio .otio
+    RW->>RW: quick_render_check (duration / audio / black-frame)
+    RW->>SB: upload_artifact {job_id}/{render_id}/{profile}.mp4
+    RW->>FS: mark_status READY with public artifact URL
+    loop while orchestrator collects (poll every 10 s)
+        API->>FS: GET renders/{id} status
+    end
+    FS-->>API: READY (url)
+    API-->>U: SSE agent_activity / done events while pipeline finishes
+    U->>API: GET /api/v1/jobs/{job_id}/renders/{render_id}/video
+    API-->>U: 307 redirect to Supabase public URL (or streams local file)
+    U->>API: GET /edl.otio (OpenTimelineIO project export on demand)

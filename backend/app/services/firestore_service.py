@@ -75,6 +75,14 @@ _fs_tried = False
 
 def get_firestore_client():
     global _fs_client, _fs_tried
+    # Escape hatch for quota-exhausted / offline runs: with the daily free-tier
+    # quota gone every call raises 429, and the per-call fallbacks only engage
+    # when the client is None — NOT when calls fail. So a hard kill switch is
+    # the only clean way to force the fully-local store path.
+    if os.getenv("CHRONOCUT_DISABLE_FIRESTORE", "").strip() in ("1", "true", "yes"):
+        _fs_client = None
+        _fs_tried = True
+        return None
     if not _HAVE_FIRESTORE:
         logger.warning("Firestore unavailable: google-cloud-firestore not installed.")
         return None

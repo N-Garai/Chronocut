@@ -189,6 +189,14 @@ class JobRunner:
         await self._queue.put(job_id)
 
     async def _recover(self) -> None:
+        # Startup recovery re-queues everything left QUEUED/PROCESSING/FAILED
+        # by a dead worker. Right for the always-on Render instance (OOM crash
+        # recovery), but wrong for local demo runs: any stale job in the shared
+        # local store gets claimed and re-run before the user's new job.
+        # CHRONOCUT_RESUME_STALE_JOBS=0 skips the whole startup sweep.
+        if os.getenv("CHRONOCUT_RESUME_STALE_JOBS", "1").strip().lower() in ("0", "false", "no"):
+            logger.info("startup job recovery disabled (CHRONOCUT_RESUME_STALE_JOBS=0)")
+            return
         try:
             jobs = JobStateService.list_jobs(limit=200)
             now = datetime.now(timezone.utc)
@@ -264,6 +272,8 @@ class JobRunner:
         """
         while True:
             await asyncio.sleep(60)
+            if os.getenv("CHRONOCUT_RESUME_STALE_JOBS", "1").strip().lower() in ("0", "false", "no"):
+                continue
             try:
                 jobs = JobStateService.list_jobs(limit=200)
                 now = datetime.now(timezone.utc)

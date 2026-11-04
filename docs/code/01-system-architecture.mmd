@@ -1,0 +1,72 @@
+%% ChronoCut system architecture — verified against backend/app/main.py,
+%% config.py, provider.py, services/renders.py, workers/render_worker.py,
+%% .github/workflows/render-worker.yml and frontend/src/main.jsx (Nov 2026).
+flowchart TB
+
+    subgraph CLIENT["Client plane - Cloudflare Pages (Vite static build)"]
+        direction TB
+        LANDING["Landing page (/)"]
+        STUDIO["Studio (/studio)<br/>upload + agent terminal + output player"]
+        EDITOR["Timeline editor (/studio/:jobId/timeline)<br/>EDL ops + agent chat + telemetry"]
+        APICLIENT["API client (lib/api.js)<br/>REST + EventSource SSE"]
+        LANDING --- STUDIO
+        STUDIO --- EDITOR
+        STUDIO -.-> APICLIENT
+        EDITOR -.-> APICLIENT
+    end
+
+    APICLIENT ==>|"HTTPS REST /api/v1 + SSE"| MAIN
+
+    subgraph API["API plane - Render web service (FastAPI container)"]
+        direction TB
+        MAIN["FastAPI app (main.py)<br/>/health + /api/v1/capabilities +<br/>jobs CRUD / cancel + events SSE +<br/>assets / ledger / review"]
+        ROUTERS["Routers: app/api/timeline.py, app/api/agent.py<br/>GET/PUT /edl, /edl/operations,<br/>/timeline/command, /edl/revisions,<br/>/edl.otio, /render, /renders/:id/video,<br/>POST /agent, GET /agent/activity"]
+        RUNNER["app/job_runner.py<br/>one child process per QUEUED job<br/>(stale reclaim + requeue cap)"]
+        PIPELINE["agents/orchestrator.py<br/>LeadOrchestratorAgent.run_job()"]
+        MAIN --- ROUTERS
+        MAIN --> RUNNER
+        RUNNER --> PIPELINE
+    end
+
+    PIPELINE ==>|"model calls"| GOVERNOR
+    PIPELINE -->|"muse-voice-transcribe ASR<br/>(multipart, chunked)"| PRIMARY
+    PIPELINE -->|"job state, events, render docs"| FS
+
+    subgraph MODELS["Meta model plane (every runtime model is Meta)"]
+        direction TB
+        GOVERNOR["tools/llm seam: scored_llm_call<br/>cache -> rate limit -> budget -><br/>in-flight coalesce -> provider chain"]
+        PRIMARY["Primary: Meta Model API<br/>api.meta.ai/v1<br/>muse-spark-1.3 (1.2 / 1.1 in-family)<br/>muse-voice-transcribe-1.0 (ASR)<br/>muse-image-1.0 (optional B-roll, off by default)"]
+        FAILOVER["Failover slots (own env keys;<br/>unconfigured ones skipped):<br/>openrouter / baseten<br/>meta-models/muse-spark-open<br/>+ local meta-models/Muse-Glimmer-30B"]
+        TEMPLATES["Deterministic templates<br/>final backstop"]
+        GOVERNOR -->|"first call"| PRIMARY
+        GOVERNOR -.->|"provider error"| FAILOVER
+        FAILOVER -.->|"all slots down"| TEMPLATES
+    end
+
+    PIPELINE -->|"resolve_visual search"| CORPUS
+
+    subgraph FTP["Footage plane"]
+        direction TB
+        CORPUS["footage/resolver.py chain:<br/>local corpus -> Pexels -> Pixabay -><br/>Wikimedia -> archive.org -> NASA -> matte"]
+    end
+
+    PIPELINE -->|"create_render + dispatch_actions"| WFDIR
+    ROUTERS -->|"POST /render -> create_render + dispatch"| WFDIR
+    WORKER -->|"read EDL revision + mark status"| FS
+    WORKER -->|"PUT {jobId}/{renderId}/{profile}.mp4"| SB
+    ROUTERS -->|"307 redirect to stored artifact"| SB
+
+    subgraph RENDER["Render plane - GitHub Actions worker"]
+        direction TB
+        WFDIR["render-worker.yml trigger:<br/>repository_dispatch chronocut-render<br/>checkout + python 3.11 + ffmpeg +<br/>pip install backend/requirements.txt"]
+        WORKER["workers/render_worker.py<br/>get render doc -> fetch EDL revision -><br/>mark RENDERING -> render_edl (ffmpeg)<br/>-> quick_render_check -> mark READY"]
+    end
+    WFDIR --> WORKER
+
+    subgraph DATA["Data plane"]
+        direction TB
+        FS["Firestore<br/>collections: jobs, events, ledger,<br/>corpus, assets, renders<br/>(local JSON store fallback)"]
+        SB["Supabase Storage<br/>public bucket: renders"]
+        OPTIO["OpenTimelineIO export<br/>GET /edl.otio"]
+        ROUTERS -.-> OPTIO
+    end

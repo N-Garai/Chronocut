@@ -1,0 +1,77 @@
+%% ChronoCut generation pipeline — stage percentages are the real _emit()
+%% values in backend/app/agents/orchestrator.py (run_job).
+flowchart LR
+
+    subgraph P1["1 - Intake"]
+        direction TB
+        START(["POST /api/v1/jobs<br/>mode: from_prompt | from_media | from_reference<br/>media[] up to 200 files / 500 MB"])
+        RUNNER["job_runner submits the job;<br/>child process started"]
+        START --> RUNNER
+        RUNNER --> MODE{"mode?"}
+        MODE -->|"from_reference"| REF["reference 10-15%<br/>analyze_reference: yt-dlp fetch,<br/>scene detect, keyframes, frame analysis"]
+        REF --> INGEST
+        MODE -->|"others"| INGEST["ingest 4-5%<br/>merge_prompt_with_documents (brief)<br/>validate_model probe -> llm_available"]
+        INGEST --> DISC["orchestrator 6%<br/>CapabilityDiscoveryAgent<br/>(no model call)"]
+    end
+
+    subgraph P2["2 - Understand the material"]
+        direction TB
+        ARCH["archivist 20-35%<br/>ArchivistAgent.process:<br/>muse-voice-transcribe ASR (10-min windows),<br/>video ingest, photo vision tags"]
+        FILL["archivist 36%<br/>FillerAnalyzerAgent: regex disfluency count"]
+        RAGC["rag 38% (if ENABLE_RAG)<br/>rag_service.find_similar — past project memory"]
+        ARCH --> FILL --> RAGC
+    end
+
+    subgraph P3["3 - Write"]
+        direction TB
+        SW["screenwriter 42-52%<br/>tools/script: script_from_prompt /<br/>script_from_reference / script_from_transcript<br/>(muse-spark text call)"]
+        ARC["screenwriter 53%<br/>NarrativeArcSpecialist: 3-act outline"]
+        KW["B-roll keyword extraction<br/>(footage/keyword_gen)"]
+        SW --> ARC --> KW
+    end
+
+    subgraph P4["4 - Direct the cut"]
+        direction TB
+        GATE1{"ENABLE_DIRECTOR,<br/>llm_available,<br/>not cancelled?"}
+        GATE1 -->|"blocked / cancelled"| EDL0B["deterministic storyboard"]
+        GATE1 -->|"ready"| DIRECTOR["director 58-64%<br/>StoryboardComposerAgent shot list<br/>(each shot resolved through the footage chain)<br/>+ DirectorAgent edit decisions<br/>(skills: cuts / grade / motion / sound)"]
+        DIRECTOR --> SB3["director 66%<br/>storyboard ready"]
+        EDL0B --> SB3
+    end
+
+    subgraph P5["5 - Edit and assemble"]
+        direction TB
+        GATE2{"ENABLE_EDITOR,<br/>llm_available?"}
+        GATE2 -->|"yes"| EDP["editor 68%<br/>EditorAgent supervisor refines<br/>the storyboard (deterministic apply)"]
+        GATE2 -->|"no"| NARR
+        EDP --> NARR{"memory > 700 MB?"}
+        NARR -->|"yes"| TTS["editor 70-72%<br/>Meta MMS-TTS narration<br/>(facebook/mms-tts-eng, local per-shot mp3)"]
+        NARR -->|"skip"| EDL
+        TTS --> EDL["editor 88%<br/>build_edl_from_storyboard + save_edl (pipeline revision);<br/>reframe_sources recomputes focus crops"]
+    end
+
+    subgraph P6["6 - Deliver and review"]
+        direction TB
+        DISPATCH{"Firestore on + GH_REPO +<br/>GH_DISPATCH_TOKEN?"}
+        DISPATCH -->|"yes"| EXT["render 90-91%<br/>create_render per profile + dispatch_actions<br/>(see 04-render-dispatch);<br/>poll renders docs and collect READY artifacts"]
+        DISPATCH -->|"no"| LOCAL["editor 92%<br/>in-process render_job (ffmpeg),<br/>memory clamped"]
+        EXT -->|"missing profiles"| LOCAL2["locally render the remainder"]
+        EXT --> ART
+        LOCAL --> ART
+        LOCAL2 --> ART
+        ART["editor 92%<br/>artifacts uploaded (renders worker<br/>-> Supabase; local files re-uploaded)"]
+        ART --> REVIEW{"ENABLE_SELF_REVIEW?"}
+        REVIEW -->|"yes"| SR["review 95-97%<br/>SelfReviewAgent: frame sampling,<br/>audio levels, duration promise"]
+        REVIEW -->|"no / pass"| GOV
+        SR --> GOV
+        GOV["orchestrator 98%<br/>BudgetGovernorAgent cost report;<br/>RAG memory persist"]
+        GOV --> DONE
+        DONE(["done 100% — final status:<br/>COMPLETE | NEEDS_REVIEW | FAILED | CANCELLED"])
+    end
+
+    DISC --> ARCH
+    RAGC --> SW
+    FILL -->|no RAG| SW
+    KW --> GATE1
+    SB3 --> GATE2
+    EDL --> DISPATCH

@@ -1,4 +1,4 @@
-__pycache__/
+﻿__pycache__/
 *.pyc
 .venv/
 venv/
@@ -39,3 +39,8 @@ artifact/
 # server logs
 chronocut.log*
 *.log
+
+# Bundled Windows-only runtime binaries stay local (repo stays lean; Docker/CI
+# install ffmpeg via apt). The local copy keeps local Windows runs working.
+backend/bin/
+

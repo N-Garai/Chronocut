@@ -205,8 +205,13 @@ def _build_vf(
             dur = max(1.0, duration)
             alpha = (f"alpha='if(lt(t,0.3),t/0.3,"
                      f"if(gt(t,{dur}-0.3),({dur}-t)/0.3,1))'")
+            # A raw Windows path ("C:\Users\...") breaks filtergraph parsing:
+            # the backslashes escape into the quoted string and the parser
+            # dies with "No option name near '\Users...'". Forward slashes
+            # plus an escaped drive colon parse on every platform.
+            _tf_arg = str(textfile).replace("\\", "/").replace(":", "\\:")
             chain.append(
-                f"drawtext=textfile='{textfile}':fontcolor=white:fontsize=48:"
+                f"drawtext=textfile='{_tf_arg}':fontcolor=white:fontsize=48:"
                 "box=1:boxcolor=black@0.4:boxborderw=8:"
                 f"x=(w-tw)/2:y=h-th-40:{alpha}"
             )
@@ -239,8 +244,9 @@ def burn_drawtext_final(video_in: str, storyboard: List[Dict], profile, out_path
                 f.write(str(txt))
             alpha = (f"alpha='if(lt(t,{start + 0.3:.2f}),(t-{start:.2f})/0.3,"
                      f"if(gt(t,{end - 0.3:.2f}),({end - 0.3:.2f}-t)/0.3,1))'")
+            _tf_arg = str(tf).replace("\\", "/").replace(":", "\\:")
             chain.append(
-                f"drawtext=textfile='{tf}':fontcolor=white:fontsize=48:box=1:"
+                f"drawtext=textfile='{_tf_arg}':fontcolor=white:fontsize=48:box=1:"
                 f"boxcolor=black@0.4:boxborderw=8:x=(w-tw)/2:y=h-th-40:{alpha}:"
                 f"enable='between(t,{start:.2f},{end:.2f})'"
             )

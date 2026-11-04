@@ -245,7 +245,7 @@ async def scored_llm_call(
         # failing primary) are skipped.
         text = None
         raised = primary_error
-        for fb in settings.llm_fallback_chain():
+        for fb in settings.llm_fallback_providers:
             if fb == provider_name or not _provider_ready(fb):
                 continue
             try:

@@ -1,0 +1,64 @@
+%% ChronoCut agentic workflow — verified against backend/app/agents/*
+%% and app/agents/sub_agents/* (registered agents + direct-import specialists).
+flowchart TB
+    USER(["User brief / footage / reference link"]) --> ORCH
+
+    ORCH["LeadOrchestratorAgent<br/>(agents/orchestrator.py)"]
+    ORCH -->|"stage plan + completed_stages skip<br/>+ telemetry _emit per stage"| TEAM
+
+    subgraph TEAM["Agent team"]
+        ARCH["ArchivistAgent"]
+        subgraph ARCH_KIDS["archivist children"]
+            TRANSCR["AudioTranscriberSubAgent<br/>Muse Voice Transcribe ASR"]
+            TAGGER["ImageTaggerSubAgent<br/>muse-spark vision JSON"]
+            FILLER["FillerAnalyzerAgent<br/>(regex, no model)"]
+        end
+        SW["Screenwriter stage<br/>tools/script/screenwriter_tools<br/>+ NarrativeArcSpecialist (no model)"]
+        DIR["DirectorAgent<br/>(skills: cuts / grade / motion / sound)"]
+        STORY["StoryboardComposerAgent<br/>shot list + durations"]
+        BROLL["BRollSourcingSpecialist /<br/>VisualMatcherSpecialist<br/>resolve_visual footage chain"]
+        ED["EditorAgent (supervisor)"]
+        subgraph SUBS["SubAgentRunner batches (max 8 calls per apply)"]
+            RHY["rhythmist — micro-trims"]
+            MOT["motionist — camera motion"]
+            COL["colorist — grade presets"]
+            TRA["transitionist — xfade family"]
+            AUD["audioist — duck / bed / sfx"]
+            TYP["typographer — captions / type"]
+        end
+        GATE["SelfReviewAgent — quality gate"]
+        BUDGET["BudgetGovernorAgent — cost report"]
+        CAPS["CapabilityDiscoveryAgent"]
+    end
+
+    ORCH --> CAPS
+    ORCH -->|"transcribe + tag"| ARCH
+    ARCH --> TRANSCR
+    ARCH --> TAGGER
+    ARCH --> FILLER
+    ORCH -->|"script (LLM via tools/script)"| SW
+    ORCH -->|"edit decisions + storyboard"| DIR
+    DIR --> STORY
+    STORY --> BROLL
+    ORCH -->|"refine storyboard"| ED
+    ED --> SUBS
+    ORCH -->|"final artifacts"| GATE
+    ORCH --> BUDGET
+
+    subgraph GOVERN["Governed model seam (tools/llm/call.py)"]
+        CACHE["LLM cache (prompt/model/media hash)"]
+        BUD["budget check + rate limiter"]
+        COAL["in-flight coalesce"]
+        CHAIN["provider chain:<br/>muse-spark-1.3 -> 1.2 -> 1.1<br/>-> openrouter -> baseten<br/>-> local Muse Glimmer -> templates"]
+        CACHE --> BUD --> COAL --> CHAIN
+    end
+
+    TRANSCR -.->|"meta_asr multipart"| MODELS[("Meta Model API<br/>+ failover slots")]
+    TAGGER -.-> CHAIN
+    SW -.-> CHAIN
+    DIR -.-> CHAIN
+    ED -.-> CHAIN
+    RHY & MOT & COL & TRA & AUD & TYP -.-> CHAIN
+
+    TEAM -->|"EDL revisions + agent activity<br/>via JobStateService + telemetry"| STORE[("Firestore / local JSON<br/>jobs, events, ledger")]
+    BUDGET -.-> CHAIN

@@ -238,18 +238,6 @@ def resolve_visual(query: str, duration: float = 5.0, job_id: str = None, profil
     except Exception as e:
         logger.warning(f"resolve_visual Tier3b (images) failed: {e}")
 
-    # Tier4: local open-weights text-to-video (strictly opt-in via
-    # VIDEO_GEN_PROVIDER=local — a video model needs GBs of RAM and minutes
-    # per clip, so it must never engage unbidden). Fills shots no stock
-    # provider could cover before the matte fallback.
-    try:
-        from app.tools.videoagen import try_generate_shot_video
-        gen = try_generate_shot_video(query, duration, asset_dir, job_id=job_id)
-        if gen:
-            return gen
-    except Exception as e:
-        logger.warning(f"resolve_visual Tier4 (video gen) failed: {e}")
-
-    # Tier5: generated color matte.
+    # Tier4: generated color matte.
     logger.info(f"resolve_visual: all tiers exhausted for '{query}'; using matte fallback")
     return _matte(query)

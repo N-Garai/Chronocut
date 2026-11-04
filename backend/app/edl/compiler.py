@@ -275,8 +275,11 @@ def clip_vf_chain(
                 dur = max(1.0, duration)
                 alpha = (f"alpha='if(lt(t,0.3),t/0.3,"
                          f"if(gt(t,{dur - 0.3:.2f}),({dur - 0.3:.2f}-t)/0.3,1))'")
+                # Escape the temp-file path for filtergraph parsing (raw
+                # "C:\Users\..." breaks: backslashes leak out of the quotes).
+                _tf_arg = str(textfile).replace("\\", "/").replace(":", "\\:")
                 chain.append(
-                    f"drawtext=textfile='{textfile}':fontcolor={color}:fontsize={size}:"
+                    f"drawtext=textfile='{_tf_arg}':fontcolor={color}:fontsize={size}:"
                     f"box=1:boxcolor=black@0.4:boxborderw=8:x=(w-tw)/2:y={ypos}:{alpha}"
                 )
             except Exception as e:
