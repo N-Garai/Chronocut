@@ -190,6 +190,18 @@ def normalize_edl(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             "width": s.get("width"),
             "height": s.get("height"),
         })
+        # Optional fields consumed downstream (compiler resolve_sources /
+        # external render workers): remote fetch URL, on-runner TTS text,
+        # language hint, and the synth ambient kind.
+        src = sources[-1]
+        if s.get("url"):
+            src["url"] = str(s.get("url"))
+        if s.get("text"):
+            src["text"] = str(s.get("text"))
+        if s.get("lang"):
+            src["lang"] = s.get("lang")
+        if s.get("kind"):
+            src["kind"] = str(s.get("kind"))
     source_ids = {s["id"] for s in sources}
 
     tracks_in = {t.get("id"): t for t in (raw.get("tracks") or []) if isinstance(t, dict)}

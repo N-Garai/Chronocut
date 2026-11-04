@@ -69,9 +69,8 @@ def _choose_overlay_engine() -> str:
     try HyperFrames first and fall back to drawtext on any failure.
     """
     try:
-        import psutil  # type: ignore
-        vm = psutil.virtual_memory()
-        avail_mb = vm.available / (1024 * 1024)
+        from app.services.memory import available_mb
+        avail_mb = available_mb()
         # 1024MB = safe threshold for HyperFrames on a 2GB+ instance.
         # Render free tier (512MB) will always fall below this.
         if avail_mb >= 1024:
@@ -197,13 +196,21 @@ def _clamp_profile_to_memory(profile: RenderProfile, job_id: Optional[str], pnam
     lets those containers complete; bigger hosts keep their original profile.
     """
     try:
-        import psutil  # type: ignore
-        avail_mb = psutil.virtual_memory().available / (1024 * 1024)
+        from app.services.memory import available_mb
+        avail_mb = available_mb()
     except Exception:
         # Unknown memory fails toward the safe (small) path for the same reason
         # as concatenate_with_transitions: assuming "plenty" OOMs the container.
         avail_mb = 0.0
-    if avail_mb >= 700:
+    # 700MB targets the 512MB Render free-tier container. Bigger hosts (e.g. a
+    # local dev laptop whose *available* RAM momentarily dips below the default
+    # because of unrelated apps) can raise/lower the bar via env without code
+    # changes; the threshold, not the total, is what decides clamping.
+    try:
+        threshold = float(os.environ.get("CHRONOCUT_MEMORY_CLAMP_MB", "700"))
+    except ValueError:
+        threshold = 700.0
+    if avail_mb >= threshold:
         return profile
     longest = max(profile.width, profile.height)
     scale = 480.0 / longest

@@ -124,15 +124,20 @@ def _color_grade_filter(grade: Optional[str]) -> Optional[str]:
     """E1: cinematic look presets (free, pure ffmpeg)."""
     if grade == "cinematic":
         # teal-orange lift + gentle vignette + soft shallow-DoF blur.
-        return "eq=r=1.06:b=1.06:g=1.0:saturation=1.12:v=1.02," \
-               "vignette=PI/4:alpha=0.18," \
+        # eq only accepts full option names (gamma_r/brightness/...): shorthand
+        # letters like r=/v= are rejected by newer ffmpeg and killed the whole
+        # filter chain, forcing source-resolution passthrough (4K -> OOM).
+        # vignette has NO alpha option either (its angle sets strength); an
+        # alpha= key there failed the chain the same way.
+        return "eq=gamma_r=1.06:brightness=0.06:gamma=1.0:saturation=1.12," \
+               "vignette=angle=PI/4," \
                "gblur=sigma=1.2"
     if grade == "bw":
-        return "hue=s=0,eq=contrast=1.12:saturation=0:b=0.02," \
-               "vignette=PI/4:alpha=0.12"
+        return "hue=s=0,eq=contrast=1.12:saturation=0:brightness=0.02," \
+               "vignette=angle=PI/5"
     if grade == "anamorphic":
         return "eq=saturation=1.05:contrast=1.08,setsar=1," \
-               "vignette=PI/5:alpha=0.15"
+               "vignette=angle=PI/5"
     return None
 
 
@@ -301,7 +306,14 @@ def build_segment(
         if not ok and vf:
             base = vf.split(",")[0]
             ok = _run(base)
-        if not ok and vf:
+        if not ok:
+            # Last controlled fallback: clamp to the profile canvas (even dims)
+            # so a bad decorative filter can never escalate to source-resolution
+            # encoding (4K UHD sources OOM a small container).
+            safe = (f"scale={profile.width}:{profile.height}:force_original_aspect_ratio=decrease,"
+                    f"pad={profile.width}:{profile.height}:(ow-iw)/2:(oh-ih)/2")
+            ok = _run(safe)
+        if not ok:
             ok = _run(None)
         if not ok:
             logger.error(f"build_segment gave no usable output for {input_path}")
@@ -344,8 +356,8 @@ def concatenate_with_transitions(
         # service. When memory is tight we skip xfade and stream-copy the segments
         # (hard cuts) — still a valid video, just less fancy, and safe to render.
         try:
-            import psutil  # type: ignore
-            avail_mb = psutil.virtual_memory().available / (1024 * 1024)
+            from app.services.memory import available_mb
+            avail_mb = available_mb()
         except Exception:
             # Unknown memory must fail toward the lean path: assuming "plenty"
             # on a host without psutil would pick the multi-input xfade graph

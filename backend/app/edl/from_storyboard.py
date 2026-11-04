@@ -173,9 +173,13 @@ def build_edl_from_storyboard(
                 "style": {"position": "bottom", "size": 42, "color": "#ffffff", "fade": True},
             })
 
-        # Narration: one clip per shot backed by the render-path mp3.
+        # Narration: one clip per shot. When the render-path mp3 exists (TTS ran
+        # on this machine) the clip is file-backed; otherwise the clip carries
+        # the shot's audio_text so an external render worker (which has the TTS
+        # model) can voice it — a 512MB API container must not run torch.
         if narration_dir:
             narr_path = os.path.join(narration_dir, f"{shot.get('shot_id', i + 1)}.mp3")
+            narr_text = str(shot.get("audio_text") or "").strip()
             if os.path.exists(narr_path) and os.path.getsize(narr_path) > 0:
                 narr_src_id = f"src-narr-{shot.get('shot_id', i + 1)}"
                 if not any(s["id"] == narr_src_id for s in sources):
@@ -183,6 +187,30 @@ def build_edl_from_storyboard(
                         "id": narr_src_id,
                         "type": "audio",
                         "path": narr_path,
+                        "sha256": None,
+                        "duration": None,
+                        "width": None,
+                        "height": None,
+                    })
+                narration_clips.append({
+                    "id": f"a1-{len(narration_clips) + 1:02d}",
+                    "source_id": narr_src_id,
+                    "start": round(cursor, 3),
+                    "duration": round(duration, 3),
+                    "in": 0.0,
+                    "speed": 1.0,
+                    "gain": 1.0,
+                })
+            elif narr_text:
+                narr_src_id = f"src-narr-{shot.get('shot_id', i + 1)}"
+                if not any(s["id"] == narr_src_id for s in sources):
+                    sources.append({
+                        "id": narr_src_id,
+                        "type": "narration_text",
+                        "path": "",
+                        "url": "",
+                        "text": narr_text[:800],
+                        "lang": str(shot.get("language") or "") or None,
                         "sha256": None,
                         "duration": None,
                         "width": None,

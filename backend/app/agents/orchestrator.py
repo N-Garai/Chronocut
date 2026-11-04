@@ -34,14 +34,78 @@ def _cancelled(job_id: str) -> bool:
 
 
 def _check_memory() -> Dict[str, Any]:
-    """Free-tier memory guard. Returns memory info for logging/decisions."""
+    """Free-tier memory guard. Returns memory info for logging/decisions.
+
+    Cgroup-aware: on a capped container the cgroup headroom is the real
+    budget even when /proc/meminfo reports the host's memory.
+    """
     try:
+        from app.services.memory import available_mb
+        avail_mb = available_mb()
         import psutil  # type: ignore
-        vm = psutil.virtual_memory()
-        avail_mb = vm.available / (1024 * 1024)
-        return {"available_mb": round(avail_mb, 1), "total_mb": round(vm.total / (1024 * 1024), 1)}
+        total_mb = psutil.virtual_memory().total / (1024 * 1024)
+        return {"available_mb": round(avail_mb, 1), "total_mb": round(total_mb, 1)}
     except Exception:
         return {"available_mb": -1, "total_mb": -1}
+
+
+async def _collect_external_renders(job_id: str, render_ids: Dict[str, str],
+                                    timeout_s: int = 1500) -> tuple:
+    """Poll external render docs until terminal; download READY artifacts.
+
+    Returns ({profile: local_path}, {profile: url}) for renders that finished
+    with a servable artifact; profiles that failed or timed out are simply
+    absent so the caller falls back to the in-process renderer for them.
+    """
+    import time as _time
+    from app.services.renders import get_render
+
+    out_dir = os.path.join(tempfile_dir(), f"chronocut_ext_{job_id}")
+    os.makedirs(out_dir, exist_ok=True)
+    paths: Dict[str, str] = {}
+    urls: Dict[str, str] = {}
+    pending = dict(render_ids)
+    deadline = _time.monotonic() + timeout_s
+    last_emit = 0.0
+    while pending and _time.monotonic() < deadline:
+        await asyncio.sleep(10)
+        for pname, rid in list(pending.items()):
+            doc = get_render(rid) or {}
+            st = str(doc.get("status") or "")
+            if st == "READY":
+                url = str(doc.get("url") or "")
+                if url.startswith("http"):
+                    dest = os.path.join(out_dir, f"{pname}.mp4")
+                    try:
+                        import requests as _rq
+                        with _rq.get(url, stream=True, timeout=300) as r:
+                            r.raise_for_status()
+                            with open(dest, "wb") as f:
+                                for chunk in r.iter_content(1 << 20):
+                                    f.write(chunk)
+                        if os.path.getsize(dest) > 0:
+                            paths[pname] = dest
+                            urls[pname] = url
+                        else:
+                            logger.warning("external artifact for %s is empty", pname)
+                    except Exception as e:
+                        logger.warning("artifact download failed for %s (%s): %s", pname, url, e)
+                else:
+                    logger.warning("external render %s has no servable url (%r); "
+                                   "falling back to local render for %s", rid, url, pname)
+                pending.pop(pname)
+            elif st == "FAILED":
+                logger.warning("external render %s failed: %s", rid,
+                               str(doc.get("error") or "")[:200])
+                pending.pop(pname)
+        now = _time.monotonic()
+        if pending and now - last_emit > 60:
+            last_emit = now
+            _emit(job_id, "render", 91,
+                  f"External render in progress ({len(pending)} profile(s) pending)…")
+    for pname, rid in pending.items():
+        logger.warning("external render %s timed out; local fallback for %s", rid, pname)
+    return paths, urls
 
 
 class LeadOrchestratorAgent:
@@ -407,36 +471,49 @@ class LeadOrchestratorAgent:
                     pass
 
             # Skip TTS for shots that already have narration files (resumability).
-            # Generate narration audio per shot (cooperative cancellation)
+            # Generate narration audio per shot (cooperative cancellation).
+            # Torch + the VITS model need ~500MB resident, so a container with
+            # less than ~700MB free must NOT start TTS at all — it would be
+            # OOM-killed mid-load. Skipped shots carry audio_text in the EDL
+            # and are voiced by the external render worker instead.
             try:
                 from app.tools.audio import synthesize_speech
                 mem_before_tts = _check_memory()
-                tts_batch_size = 3 if mem_before_tts.get("available_mb", -1) > 500 else 1
-                tts_delay = 1.0  # seconds between TTS calls to avoid rate limiting
-                for idx, shot in enumerate(storyboard):
-                    if _cancelled(job_id):
-                        _emit(job_id, "editor", 72, "Job cancelled; stopping narration.")
-                        break
-                    if shot.get("voiceover") is False:
-                        continue
-                    text = shot.get("audio_text") or ""
-                    if not text:
-                        continue
-                    out = os.path.join(narration_dir, f"{shot['shot_id']}.mp3")
-                    if os.path.exists(out) and os.path.getsize(out) > 0:
-                        continue  # already synthesized, skip
-                    
-                    # Memory guard: if critically low memory, skip remaining TTS.
-                    mem = _check_memory()
-                    if mem.get("available_mb", -1) > 0 and mem["available_mb"] < 200:
-                        logger.warning(f"job {job_id}: low memory ({mem['available_mb']} MB); skipping remaining TTS")
-                        break
-                    
-                    await synthesize_speech(text, out_path=out)
-                    
-                    # Rate-limit guard: small delay between TTS calls.
-                    if (idx + 1) % tts_batch_size == 0:
-                        await asyncio.sleep(tts_delay)
+                if 0 <= mem_before_tts.get("available_mb", -1) < 700:
+                    _emit(job_id, "editor", 72,
+                          f"Low memory ({mem_before_tts['available_mb']:.0f} MB); "
+                          "narration will be voiced by the external render worker.")
+                    logger.warning(
+                        f"job {job_id}: skipping local TTS ({mem_before_tts['available_mb']:.0f} MB free; "
+                        "torch needs ~500MB); narration text delegated to the EDL")
+                else:
+                    tts_batch_size = 3 if mem_before_tts.get("available_mb", -1) > 1000 else 1
+                    tts_delay = 1.0  # seconds between TTS calls to avoid rate limiting
+                    for idx, shot in enumerate(storyboard):
+                        if _cancelled(job_id):
+                            _emit(job_id, "editor", 72, "Job cancelled; stopping narration.")
+                            break
+                        if shot.get("voiceover") is False:
+                            continue
+                        text = shot.get("audio_text") or ""
+                        if not text:
+                            continue
+                        out = os.path.join(narration_dir, f"{shot['shot_id']}.mp3")
+                        if os.path.exists(out) and os.path.getsize(out) > 0:
+                            continue  # already synthesized, skip
+
+                        # Memory guard: torch may still be loading; abort before
+                        # the container crosses its cgroup limit.
+                        mem = _check_memory()
+                        if 0 <= mem.get("available_mb", -1) < 300:
+                            logger.warning(f"job {job_id}: low memory ({mem['available_mb']} MB); skipping remaining TTS")
+                            break
+
+                        await synthesize_speech(text, out_path=out)
+
+                        # Rate-limit guard: small delay between TTS calls.
+                        if (idx + 1) % tts_batch_size == 0:
+                            await asyncio.sleep(tts_delay)
             except Exception as e:
                 logger.error(f"TTS failed: {e}")
 
@@ -445,6 +522,7 @@ class LeadOrchestratorAgent:
             if _cancelled(job_id):
                 _emit(job_id, "editor", 92, "Job cancelled before render.")
             else:
+                _edl_rev = 0
                 try:
                     from app.tools.render import render_job
                     # ---- EDL bridge (single source of truth) ----
@@ -486,11 +564,45 @@ class LeadOrchestratorAgent:
                     except Exception as edl_err:
                         logger.warning(f"EDL bridge skipped: {edl_err}")
 
-                    video_paths = await render_job(
-                        storyboard, assets_dir=os.path.dirname(photo_files[0]) if photo_files else tempfile_dir(),
-                        narration_dir=narration_dir, profiles=profiles, job_id=job_id,
-                        title=user_prompt,
-                    )
+                    # Heavy work (ffmpeg encode, TTS) must never run on a
+                    # 512MB API container — that is the OOM that killed
+                    # instances mid-job. When the external Actions worker is
+                    # reachable (Firestore + GH dispatch configured), render
+                    # there; the in-process clamped render stays as fallback.
+                    external: Dict[str, str] = {}
+                    if (_edl_rev and JobStateService.using_firestore()
+                            and str(settings.GH_REPO or "").strip()
+                            and str(settings.GH_DISPATCH_TOKEN or "").strip()):
+                        try:
+                            from app.services.renders import create_render, dispatch_actions
+                            _emit(job_id, "render", 90,
+                                  f"Dispatching render to external worker ({len(profiles)} profile(s))…")
+                            for _pname in profiles:
+                                _doc = create_render(job_id, revision=int(_edl_rev),
+                                                     profile=_pname, kind="final",
+                                                     dispatcher="actions")
+                                if dispatch_actions(job_id, _doc["render_id"],
+                                                    int(_edl_rev), _pname):
+                                    external[_pname] = _doc["render_id"]
+                                else:
+                                    logger.warning("external dispatch refused for %s; local fallback", _pname)
+                        except Exception as disp_err:
+                            logger.warning("render dispatch failed: %s", disp_err)
+                            external = {}
+
+                    if external:
+                        _ext_paths, _ext_urls = await _collect_external_renders(job_id, external)
+                        video_paths.update(_ext_paths)
+                        video_urls.update(_ext_urls)
+
+                    _remaining = [p for p in profiles if p not in video_paths and p not in video_urls]
+                    if _remaining:
+                        _local_render = await render_job(
+                            storyboard, assets_dir=os.path.dirname(photo_files[0]) if photo_files else tempfile_dir(),
+                            narration_dir=narration_dir, profiles=_remaining, job_id=job_id,
+                            title=user_prompt,
+                        )
+                        video_paths.update(_local_render)
                     # A 0-byte/missing file must never be reported as delivered.
                     video_paths = {k: v for k, v in video_paths.items()
                                    if v and os.path.exists(v) and os.path.getsize(v) > 0}

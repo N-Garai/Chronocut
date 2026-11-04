@@ -5,7 +5,7 @@ from typing import Optional, Dict, Any, List
 logger = logging.getLogger("chronocut.tools.audio")
 
 __all__ = [
-    "provider_audio_transcribe", "synthesize_speech",
+    "provider_audio_transcribe", "synthesize_speech", "synthesize_speech_sync",
     "get_duration",
 ]
 
@@ -101,13 +101,13 @@ def _load_tts():
         return None, None
 
 
-async def synthesize_speech(text: str, language: Optional[str] = None, out_path: Optional[str] = None) -> Optional[str]:
-    """Narration text-to-speech with Meta MMS-TTS open weights (local, keyless).
+def synthesize_speech_sync(text: str, language: Optional[str] = None,
+                           out_path: Optional[str] = None) -> Optional[str]:
+    """Blocking MMS-TTS synthesis (callable from worker threads).
 
-    Synthesizes ``text`` into ``out_path`` (WAV) and returns that path on
-    success, ``None`` when synthesis is unavailable or fails (callers degrade
-    to captions-only). ``language`` accepts an ISO 639-3 code; mirroring
-    ``MMS_TTS_LANG`` when omitted.
+    Same contract as :func:`synthesize_speech`, which is a thin async wrapper
+    over this — the synthesis itself is pure blocking compute (model forward
+    pass), so threads use the sync core directly.
     """
     if not text or not text.strip():
         return None
@@ -145,6 +145,17 @@ async def synthesize_speech(text: str, language: Optional[str] = None, out_path:
     except Exception as e:
         logger.warning(f"MMS-TTS synthesis failed: {e}")
     return None
+
+
+async def synthesize_speech(text: str, language: Optional[str] = None, out_path: Optional[str] = None) -> Optional[str]:
+    """Narration text-to-speech with Meta MMS-TTS open weights (local, keyless).
+
+    Synthesizes ``text`` into ``out_path`` (WAV) and returns that path on
+    success, ``None`` when synthesis is unavailable or fails (callers degrade
+    to captions-only). ``language`` accepts an ISO 639-3 code; mirroring
+    ``MMS_TTS_LANG`` when omitted.
+    """
+    return synthesize_speech_sync(text, language=language, out_path=out_path)
 
 
 def _parse_transcript(text: str) -> List[Dict[str, Any]]:

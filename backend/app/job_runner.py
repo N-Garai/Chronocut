@@ -33,6 +33,7 @@ import asyncio
 import logging
 import multiprocessing as mp
 import threading
+import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -95,7 +96,23 @@ def _child_main(job_id: str) -> None:
     try:
         from app.agents.orchestrator import LeadOrchestratorAgent
 
-        input_files = (JobStateService.get_job(job_id) or {}).get("input_files") or {}
+        from app.services.firestore_service import get_firestore_client
+        print(f"[child] {job_id} client=None? {get_firestore_client() is None} "
+              f"t={datetime.now(timezone.utc).isoformat()}", flush=True)
+        _doc: dict = {}
+        # The child must see the job doc the API just wrote; retry briefly so a
+        # slow first read can never silently strip the job's input_files (the
+        # observed "Untitled story"/60s fallback regression).
+        for _attempt in range(6):
+            _doc = JobStateService.get_job(job_id) or {}
+            if _doc.get("input_files"):
+                break
+            print(f"[child] {job_id} attempt {_attempt}: doc_keys={sorted(_doc.keys())[:12]} "
+                  f"t={datetime.now(timezone.utc).isoformat()}", flush=True)
+            time.sleep(2)
+        input_files = _doc.get("input_files") or {}
+        print(f"[child] {job_id} final input_keys={sorted(input_files.keys())[:10]} "
+              f"mode={input_files.get('mode')!r}", flush=True)
         asyncio.run(LeadOrchestratorAgent().run_job(job_id, input_files))
     except Exception as e:  # noqa: BLE001 - last-resort guard
         logger.error(f"job {job_id} child failed: {e}")
@@ -111,9 +128,8 @@ def _child_main(job_id: str) -> None:
 def _check_memory() -> None:
     """Free-tier guard: log a warning if available memory is critically low."""
     try:
-        import psutil  # type: ignore
-        avail = psutil.virtual_memory().available
-        avail_mb = avail / (1024 * 1024)
+        from app.services.memory import available_mb
+        avail_mb = available_mb()
         if avail_mb < 200:
             logger.warning(f"Low memory available: {avail_mb:.1f} MB. Render free tier has 512 MB total. Consider disabling MoviePy or reducing resolution.")
     except Exception:
@@ -212,6 +228,11 @@ class JobRunner:
             return False
         JobStateService.update_job(jid, {
             "status": "QUEUED", "claimed_at": None, "claimed_by": None,
+            # Clear the dead run's heartbeat too: a stale heartbeat_at takes
+            # precedence over claimed_at in the staleness check, and leaving it
+            # behind makes every 60s sweep instantly re-dispatch the job again
+            # (the observed 1-2 minute OOM crash loop on the 512MB instance).
+            "heartbeat_at": None,
             "error_log": {}, "requeue_count": count + 1,
         })
         await self._queue.put(jid)

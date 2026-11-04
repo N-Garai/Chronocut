@@ -101,6 +101,20 @@ def resolve_sources(edl: Dict[str, Any], cache_dir: str) -> Dict[str, Dict[str, 
         if stype == "synth":
             resolved[sid] = {"type": "synth", "path": "", "kind": str(src.get("kind") or "drone")}
             continue
+        if stype == "narration_text":
+            # Voiceless narration clip (TTS was skipped on the API container —
+            # it must not run torch). Synthesize here, where the model is safe.
+            text = str(src.get("text") or "").strip()
+            if not text:
+                continue
+            from app.tools.audio.transcribe import synthesize_speech_sync
+            local = os.path.join(cache_dir, f"narr_{sid}.wav")
+            synth = synthesize_speech_sync(text, language=src.get("lang"), out_path=local)
+            if not synth:
+                logger.warning("narration source %s could not be synthesized; dropping clip", sid)
+                continue
+            resolved[sid] = {"type": "audio", "path": synth, "duration": None}
+            continue
         if (not path or not os.path.exists(path)) and url:
             safe_name = f"remote_{sid}.{(url.split('?')[0].rsplit('.', 1)[-1] or 'bin')[:8]}"
             local = os.path.join(cache_dir, safe_name)
@@ -132,11 +146,12 @@ def grade_filter(value: Optional[str]) -> Optional[str]:
     if g in ("clean", "neutral", ""):
         return None
     if g == "cinematic":
-        return "eq=r=1.06:b=1.06:g=1.0:saturation=1.12:v=1.02,vignette=PI/4:alpha=0.18,gblur=sigma=1.2"
+        # vignette has no alpha option (angle sets strength); alpha= failed the chain.
+        return "eq=gamma_r=1.06:brightness=0.06:gamma=1.0:saturation=1.12,vignette=angle=PI/4,gblur=sigma=1.2"
     if g in ("bw", "b&w"):
-        return "hue=s=0,eq=contrast=1.12:saturation=0:b=0.02,vignette=PI/4:alpha=0.12"
+        return "hue=s=0,eq=contrast=1.12:saturation=0:brightness=0.02,vignette=angle=PI/5"
     if g == "nostalgic":
-        return "eq=gamma=1.08:saturation=0.82:contrast=0.94,colorbalance=rs=0.06:gs=0.02:bs=-0.04:bsh=0.08"
+        return "eq=gamma=1.08:saturation=0.82:contrast=0.94,colorbalance=rs=0.06:gs=0.02:bs=-0.04:bh=0.08"
     if g == "warm":
         return "colorbalance=rs=0.08:bs=-0.06,eq=saturation=1.08"
     if g == "professional":
@@ -322,6 +337,13 @@ def build_edl_segment(
         ok = _run(vf, timeout)
         if not ok and vf:
             ok = _run(vf.split(",")[0], timeout)
+        if not ok:
+            # Controlled fallback: clamp to the profile canvas (even dims) so a
+            # bad decorative filter can never escalate to source-resolution
+            # encoding (4K UHD sources OOM a small container).
+            safe = (f"scale={profile_w}:{profile_h}:force_original_aspect_ratio=decrease,"
+                    f"pad={profile_w}:{profile_h}:(ow-iw)/2:(oh-ih)/2")
+            ok = _run(safe, timeout)
         if not ok and vf:
             ok = _run(None, timeout)
         if textfile:

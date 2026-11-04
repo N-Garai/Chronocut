@@ -96,7 +96,7 @@ class Settings(BaseSettings):
     PIXABAY_API_KEY: Optional[str] = None
     NASA_API_KEY: Optional[str] = Field(default="DEMO_KEY")
 
-    MAX_RENDER_RESOLUTION: int = Field(default=720)
+    MAX_RENDER_RESOLUTION: int = Field(default=1280)
 
     # Feature flags.
     ENABLE_FOOTAGE_CORPUS: bool = Field(default=True)
