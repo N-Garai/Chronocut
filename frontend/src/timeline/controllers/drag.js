@@ -7,7 +7,8 @@ export function attachDrag({ clipEl, clipId, pps = 50, onBegin, setPreview, comm
   const start = (ev) => {
     if (ev.button !== 0) return
     ev.preventDefault()
-    ev.stopPropagation()
+    // no stopPropagation: React's delegated onPointerDown (clip selection)
+    // must still fire — the playhead/marquee controllers skip clip targets
     const startX = ev.clientX
     onBegin?.(clipId)
     let active = true

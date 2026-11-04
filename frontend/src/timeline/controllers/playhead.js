@@ -11,6 +11,7 @@
 export function attachPlayhead({ container, getXMs, setPreview, commit, pps = 50 }) {
   const handler = async (ev) => {
     if (ev.button !== 0) return
+    if (ev.target?.closest?.('[data-clip-id]')) return // clip handles its own select/drag
     ev.preventDefault()
     container.setPointerCapture?.(ev.pointerId)
     let active = true

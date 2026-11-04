@@ -420,7 +420,8 @@ async def get_render_status(job_id: str, render_id: str):
 
 
 @router.get("/renders/{render_id}/video")
-async def render_video(job_id: str, render_id: str, request: Request):
+async def render_video(job_id: str, render_id: str, request: Request,
+                       download: Optional[str] = None):
     _job_or_404(job_id)
     doc = _render_doc_or_404(job_id, render_id)
     path = resolve_job_path(job_id, str(doc.get("path") or ""))
@@ -430,4 +431,9 @@ async def render_video(job_id: str, render_id: str, request: Request):
         raise HTTPException(status_code=403, detail="Invalid render path")
     # Deferred import: main.py imports this router at startup.
     from app.main import _serve_file_range
-    return _serve_file_range(request, path, media_type="video/mp4")
+    headers = {}
+    if download:
+        # Cross-origin <a download> is ignored by browsers; the attachment
+        # header is what actually triggers a save dialog.
+        headers["Content-Disposition"] = f'attachment; filename="chronocut_{render_id}.mp4"'
+    return _serve_file_range(request, path, media_type="video/mp4", headers=headers)

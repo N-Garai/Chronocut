@@ -191,8 +191,10 @@ export default function OutputPlayer({ jobOutput }) {
               </Magnetic>
               {videoSrc && (
                 <Magnetic strength={0.35}>
+                  {/* The API's ?download=1 sends Content-Disposition: attachment;
+                      the `download` attribute alone is ignored cross-origin. */}
                   <a
-                    href={videoSrc}
+                    href={`${videoSrc}${videoSrc.includes('?') ? '&' : '?'}download=1`}
                     download
                     data-cursor="play"
                     className={`group flex items-center gap-3 rounded-full px-7 py-3.5 font-mono text-[11px] font-bold uppercase tracking-widest2 transition-all duration-300 ${

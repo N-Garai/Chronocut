@@ -1,9 +1,6 @@
 import { useState } from 'react'
 import { SlidersHorizontal } from 'lucide-react'
-
-const GRADES = ['clean', 'nostalgic', 'professional', 'cinematic', 'warm', 'neutral', 'teal_orange', 'bw']
-const MOTIONS = ['hold', 'push_in', 'pull_out', 'pan_left', 'pan_right', 'parallax', 'ken_burns_in', 'ken_burns_out', 'slowmo_0.5', 'speed_ramp']
-const TRANSITIONS = ['cut', 'crossfade', 'crossfade_0.5s', 'crossfade_1s', 'fade', 'dissolve', 'dip_black', 'hard_cut', 'match_cut']
+import { GRADES, MOTIONS, TRANSITIONS } from '../../timeline/presets'
 
 /**
  * Inspector — editable fields for the selected clip.

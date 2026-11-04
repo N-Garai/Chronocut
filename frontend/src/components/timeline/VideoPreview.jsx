@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
-import { Play, Pause, Volume2, VolumeOff, Maximize, Minimize, SkipBack, SkipForward } from 'lucide-react'
+import { Play, Pause, Volume2, VolumeOff, Maximize, Minimize, SkipBack, SkipForward, Download } from 'lucide-react'
 
 /**
  * VideoPreview — professional video preview pane with playback controls.
@@ -207,6 +207,18 @@ export default function VideoPreview({
             >
               <Maximize size={14} />
             </button>
+            {/* Download — the API's ?download=1 sends Content-Disposition:
+                attachment, which works cross-origin unlike <a download>. */}
+            {src && (
+              <a
+                href={`${src}${src.includes('?') ? '&' : '?'}download=1`}
+                className="rounded p-1 text-white/60 hover:bg-white/10 hover:text-white"
+                title="Download MP4"
+                data-testid="preview-download"
+              >
+                <Download size={14} />
+              </a>
+            )}
           </div>
           {/* Time scrubber */}
           <div className="flex items-center gap-2 mt-2">

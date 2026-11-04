@@ -21,6 +21,7 @@ export default function AgentTelemetryPanel({
   collapsed, onToggleCollapse,
   onQuickAction, onCommand, agentBusy, selection, playheadMs,
   revision, dirty, stale, renderState,
+  jobStage, jobProgress, jobStatus,
 }) {
   const [message, setMessage] = useState('')
   const [filterAgent, setFilterAgent] = useState('all')
@@ -63,6 +64,22 @@ export default function AgentTelemetryPanel({
           <ChevronUp size={13} />
         </button>
       </div>
+
+      {/* live pipeline progress (the same bar the studio page shows) */}
+      {jobStage && jobStatus && !['COMPLETE', 'FAILED', 'NEEDS_REVIEW', 'CANCELLED', 'DELETED'].includes(jobStatus) && (
+        <div className="border-b border-white/10 px-3 py-2" data-testid="pipeline-progress">
+          <div className="flex items-center justify-between font-mono text-[9px] uppercase tracking-widest text-white/45">
+            <span className="truncate">{jobStage}</span>
+            <span className="text-cyanglow">{Number.isFinite(jobProgress) ? `${jobProgress}%` : ''}</span>
+          </div>
+          <div className="mt-1 h-1 overflow-hidden rounded bg-white/10">
+            <div
+              className="h-full bg-cyanglow transition-all duration-500"
+              style={{ width: `${Math.max(2, Math.min(100, Number(jobProgress) || 0))}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* state chips */}
       <div className="grid grid-cols-2 gap-1.5 border-b border-white/10 px-3 py-2">

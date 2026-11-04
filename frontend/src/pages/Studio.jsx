@@ -148,7 +148,9 @@ export default function Studio() {
               {jobOutput?.render_id && (
                 <button
                   onClick={() => {
-                    const url = renderedUrl(activeJobId, jobOutput.render_id)
+                    // ?download=1 makes the API send Content-Disposition: attachment —
+                    // a plain URL would just play in the new tab.
+                    const url = `${renderedUrl(activeJobId, jobOutput.render_id)}?download=1`
                     window.open(url, "_blank")
                   }}
                   className="rounded-full border border-cyanglow px-8 py-3 font-mono text-[11px] font-bold uppercase tracking-widest2 text-cyanglow hover:bg-cyanglow/10 hover:border-cyanglow/80"

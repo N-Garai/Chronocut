@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Loader2, Play, Pause, SkipBack, SkipForward, Maximize, Minimize } from 'lucide-react'
+import { ArrowLeft, Loader2, Play, Pause, SkipBack, SkipForward, Maximize, Minimize, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import TimelineShell from '../components/timeline/TimelineShell'
 import TimelineToolbar from '../components/timeline/TimelineToolbar'
 import TransportBar from '../components/timeline/TransportBar'
 import Inspector from '../components/timeline/Inspector'
-import AssetBin from '../components/timeline/AssetBin'
+import ToolRail from '../components/timeline/ToolRail'
 import VideoPreview from '../components/timeline/VideoPreview'
 import TextEditor from '../components/timeline/TextEditor'
 import AgentTelemetryPanel from '../components/studio/AgentTelemetryPanel'
@@ -26,7 +26,7 @@ const TERMINAL_OK = ['COMPLETE', 'NEEDS_REVIEW']
  *
  * Professional video editing layout:
  *
- *   Left:   Asset bin (media upload + existing assets)
+ *   Left:   Tool rail — assets / text / transitions / effects tabs
  *   Center: Video preview (top) + Timeline with tracks (bottom)
  *   Right:  Inspector (clip properties) + Agent Telemetry (live agent feed)
  *
@@ -54,6 +54,20 @@ export default function TimelineStudio() {
   const [compact, setCompact] = useState(() => window.innerWidth < 1024)
   const [textEditorOpen, setTextEditorOpen] = useState(false)
   const [editingClipId, setEditingClipId] = useState(null)
+  const [rightOpen, setRightOpen] = useState(() => uiStore.state.panelsOpen?.inspector !== false)
+  useEffect(() => {
+    setRightOpen(uiStore.state.panelsOpen?.inspector !== false)
+  }, [jobId])
+  const toggleRight = useCallback(() => {
+    const next = !(uiStore.state.panelsOpen?.inspector !== false)
+    setRightOpen(next)
+    uiStore.set({ panelsOpen: { ...uiStore.state.panelsOpen, inspector: next } })
+  }, [])
+  const [toolTab, setToolTab] = useState(() => localStorage.getItem('chronocut.toolTab') || 'assets')
+  const switchToolTab = useCallback((t) => {
+    setToolTab(t)
+    try { localStorage.setItem('chronocut.toolTab', t) } catch { /* private mode */ }
+  }, [])
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 1023px)')
@@ -84,6 +98,7 @@ export default function TimelineStudio() {
   useEffect(() => { setSelectedClipIds([]); setStaleLocal(false) }, [jobId])
 
   const [assetRows, setAssetRows] = useState([])
+  const [assetsNonce, setAssetsNonce] = useState(0)
   useEffect(() => {
     let alive = true
     if (!jobId) return undefined
@@ -91,7 +106,7 @@ export default function TimelineStudio() {
       if (alive) setAssetRows((res?.assets || []).map((a) => ({ ...a, thumb: assetThumbUrl(a.thumb_url) })))
     })
     return () => { alive = false }
-  }, [jobId, revision])
+  }, [jobId, revision, assetsNonce])
 
   const { waveforms, thumbs } = useMemo(() => {
     const w = {}
@@ -287,6 +302,16 @@ export default function TimelineStudio() {
             <button onClick={cancelAgentPlan} className="rounded border border-white/20 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-white/60 hover:text-white" data-testid="agent-confirm-cancel">cancel</button>
           </span>
         )}
+        {!compact && (
+          <button
+            onClick={toggleRight}
+            title={rightOpen ? 'Hide inspector panel' : 'Show inspector panel'}
+            data-testid="right-panel-toggle"
+            className={`ml-auto rounded p-1.5 transition-colors ${pendingAgentPlan ? '' : rightOpen ? 'text-white/60 hover:bg-white/10 hover:text-white' : 'text-amberglow'}`}
+          >
+            {rightOpen ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
+          </button>
+        )}
       </header>
 
       {/* Timeline toolbar */}
@@ -316,21 +341,57 @@ export default function TimelineStudio() {
 
       {/* Main workspace */}
       <div className="flex min-h-0 flex-1">
-        {/* Left: Asset bin */}
-        {!compact && <AssetBin sources={edl?.sources || []} assets={assetRows} jobId={jobId} onSelect={(id) => setSelectedClipIds([id])} />}
+        {/* Left: tool rail (assets / text / transitions / effects) */}
+        {!compact && (
+          <ToolRail
+            tab={toolTab}
+            onTab={switchToolTab}
+            assetsProps={{
+              sources: edl?.sources || [],
+              assets: assetRows,
+              selectedIds: selectedClipIds,
+              jobId,
+              onSelect: (id) => setSelectedClipIds([id]),
+              onUploaded: () => setAssetsNonce((n) => n + 1),
+            }}
+            onCommand={(ops) => runBatch(cmdBatch(ops))}
+            selectedClip={selectedClip}
+            playheadMs={playheadMs}
+            durationMs={edlDurationMs(edl)}
+            readOnly={compact}
+          />
+        )}
 
-        {/* Center: Preview + Timeline */}
-        <div className="flex min-w-0 flex-1">
-          <div className="relative aspect-video w-full max-w-xl overflow-hidden bg-black" data-testid="preview-pane">
-            <VideoPreview
-              src={tl.render?.url || null}
-              playheadMs={playheadMs}
-              durationMs={edlDurationMs(edl)}
-              playing={playing}
-              setPlayheadMs={setPlayheadMs}
-              setPlaying={setPlaying}
-            />
+        {/* Center column: preview on top, tracks full-width below — the
+            standard NLE arrangement (a side-by-side row starves the track
+            surface of width and reads as "no timeline"). */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex justify-center border-b border-white/10 p-2">
+            <div className="relative aspect-video w-full max-w-xl overflow-hidden bg-black">
+              <VideoPreview
+                src={tl.render?.url || null}
+                playheadMs={playheadMs}
+                durationMs={edlDurationMs(edl)}
+                playing={playing}
+                setPlayheadMs={setPlayheadMs}
+                setPlaying={setPlaying}
+              />
+            </div>
           </div>
+
+          <TransportBar
+            playheadMs={playheadMs}
+            durationMs={edlDurationMs(edl)}
+            playing={playing}
+            pps={ui.pps}
+            onPlayPause={() => setPlaying((p) => !p)}
+            onSeek={onSeek}
+            snapping={ui.snapping}
+            ripple={ui.ripple}
+            onToggleSnapping={() => uiStore.toggle('snapping')}
+            onToggleRipple={() => uiStore.toggle('ripple')}
+            onZoom={onZoom}
+          />
 
           <TimelineShell
             edl={edl}
@@ -351,23 +412,11 @@ export default function TimelineStudio() {
             onTrimCommit={compact ? undefined : onTrimCommit}
             onDragCommit={compact ? undefined : onDragCommit}
           />
-          <TransportBar
-            playheadMs={playheadMs}
-            durationMs={edlDurationMs(edl)}
-            playing={playing}
-            pps={ui.pps}
-            onPlayPause={() => setPlaying((p) => !p)}
-            onSeek={onSeek}
-            snapping={ui.snapping}
-            ripple={ui.ripple}
-            onToggleSnapping={() => uiStore.toggle('snapping')}
-            onToggleRipple={() => uiStore.toggle('ripple')}
-            onZoom={onZoom}
-          />
         </div>
 
-        {/* Right sidebar: Inspector + Agent Telemetry */}
-        {!compact && (
+        {/* Right sidebar: Inspector + Agent Telemetry (toggleable — hiding it
+            hands the full width back to the preview and the tracks) */}
+        {!compact && rightOpen && (
           <div className="flex flex-col min-w-[300px] max-w-[420px] border-l border-white/10">
             <Inspector
               selectedClip={selectedClip}
@@ -391,6 +440,9 @@ export default function TimelineStudio() {
                 dirty={dirty}
                 stale={staleRemote || staleLocal}
                 renderState={tl.render?.status ? tl.render.status.toLowerCase() : 'unrendered'}
+                jobStage={job?.stage}
+                jobProgress={job?.progress_percent}
+                jobStatus={job?.status}
               />
             )}
           </div>

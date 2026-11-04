@@ -21,15 +21,18 @@ Fix
 * The child sets a hard address-space cap (``RLIMIT_AS`` on Linux) so a single
   runaway job fails *inside its own process* (marked ``FAILED``) instead of
   consuming the shared container memory and killing the API.
-* Firestore is the durable queue + state store. On startup the supervisor
-  reclaims ``PROCESSING`` jobs that went stale (e.g. the container was OOM-
-  killed) back to ``QUEUED`` and re-runs them. Nothing is lost across restarts.
+* Firestore is the durable queue + state store. On startup — and every minute
+  thereafter — the supervisor reclaims ``PROCESSING`` jobs whose worker stopped
+  heartbeating (e.g. the container was OOM-killed) back to ``QUEUED`` and
+  re-runs them, resuming from the last completed stage. Nothing is lost across
+  restarts.
 """
 
 import os
 import asyncio
 import logging
 import multiprocessing as mp
+import threading
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -66,6 +69,24 @@ def _child_main(job_id: str) -> None:
     os.environ["CHRONOCUT_WORKER_CHILD"] = "1"
     _set_mem_limit()
     _check_memory()
+
+    # Liveness heartbeat: a daemon thread refreshes heartbeat_at while the
+    # child is alive, so a container OOM-kill (thread dies with the process)
+    # is distinguishable from a long, healthy ffmpeg stage. Without this a
+    # dead job can only be detected by the once-at-startup sweep — and a job
+    # claimed <STALE_AFTER_MIN before a crash then stays PROCESSING forever.
+    def _beat() -> None:
+        while True:
+            try:
+                JobStateService.update_job(job_id, {
+                    "heartbeat_at": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception:
+                pass
+            threading.Event().wait(60)
+
+    threading.Thread(target=_beat, daemon=True).start()
+
     try:
         from app.agents.orchestrator import LeadOrchestratorAgent
 
@@ -116,6 +137,7 @@ class JobRunner:
         self._sem: Optional[asyncio.Semaphore] = None
         self._queue: Optional[asyncio.Queue] = None
         self._pump_task: Optional[asyncio.Task] = None
+        self._sweep_task: Optional[asyncio.Task] = None
         self._started = False
 
     async def start(self) -> None:
@@ -127,13 +149,16 @@ class JobRunner:
         self._queue = asyncio.Queue()
         await self._recover()
         self._pump_task = asyncio.create_task(self._pump())
+        self._sweep_task = asyncio.create_task(self._sweep_loop())
         self._started = True
         logger.info(f"JobRunner started (max_jobs={self.max_jobs}, worker={WORKER_ID})")
 
     async def stop(self) -> None:
-        if self._pump_task:
-            self._pump_task.cancel()
-            self._pump_task = None
+        for t in (self._pump_task, getattr(self, "_sweep_task", None)):
+            if t:
+                t.cancel()
+        self._pump_task = None
+        self._sweep_task = None
         self._started = False
 
     async def submit(self, job_id: str) -> None:
@@ -154,13 +179,7 @@ class JobRunner:
                 if st == "QUEUED":
                     await self._queue.put(jid)
                 elif st == "PROCESSING":
-                    claimed = _parse_dt(j.get("claimed_at"))
-                    if claimed and (now - claimed) > timedelta(minutes=STALE_AFTER_MIN):
-                        JobStateService.update_job(jid, {
-                            "status": "QUEUED", "claimed_at": None, "claimed_by": None,
-                        })
-                        await self._queue.put(jid)
-                        logger.warning(f"reclaimed stale PROCESSING job {jid}")
+                    await self._requeue_if_stale(j, now)
                 elif st == "FAILED":
                     # Re-queue FAILED jobs that died in the worker (OOM / crash)
                     # after a grace period so transient infra failures auto-recover.
@@ -176,6 +195,46 @@ class JobRunner:
                         logger.warning(f"re-queued crashed FAILED job {jid}: {msg}")
         except Exception as e:  # pragma: no cover
             logger.warning(f"job recovery skipped: {e}")
+
+    async def _requeue_if_stale(self, j: dict, now: datetime) -> bool:
+        """Requeue a PROCESSING job whose worker stopped heartbeating.
+
+        Liveness is ``heartbeat_at`` (refreshed by the child every 60s), falling
+        back to ``claimed_at`` for jobs created before the heartbeat existed.
+        """
+        jid = j.get("job_id")
+        if not jid:
+            return False
+        last = _parse_dt(j.get("heartbeat_at")) or _parse_dt(j.get("claimed_at"))
+        if last and (now - last) <= timedelta(minutes=STALE_AFTER_MIN):
+            return False
+        JobStateService.update_job(jid, {
+            "status": "QUEUED", "claimed_at": None, "claimed_by": None,
+        })
+        await self._queue.put(jid)
+        logger.warning(f"reclaimed stale PROCESSING job {jid} (last beat {last})")
+        return True
+
+    async def _sweep_loop(self) -> None:
+        """Periodic stale-job sweep.
+
+        Startup recovery alone misses any job claimed less than STALE_AFTER_MIN
+        before a container death — exactly the case in the observed 88% stall
+        (instance OOM-killed ~3 min into the job). The sweep re-checks every
+        minute for the life of the process.
+        """
+        while True:
+            await asyncio.sleep(60)
+            try:
+                jobs = JobStateService.list_jobs(limit=200)
+                now = datetime.now(timezone.utc)
+                for j in jobs or []:
+                    if j.get("status") == "PROCESSING":
+                        await self._requeue_if_stale(j, now)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"stale-job sweep skipped: {e}")
 
     async def _pump(self) -> None:
         assert self._queue is not None and self._sem is not None

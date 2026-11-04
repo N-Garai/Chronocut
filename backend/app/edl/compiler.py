@@ -6,7 +6,8 @@ Pipeline per render:
 3. For each video-track clip: trim (-ss/-t), speed (setpts), scale/crop
    transform, grade, motion, per-clip drawtext overlay -> intermediate segment
    (libx264, fast preset, no audio).
-4. Concatenate with xfade transitions (black slivers fill gaps).
+4. Concatenate; junction transitions are baked in as dips through black
+   (black slivers fill gaps).
 5. Build captions as an ASS file from the caption track; burn with
    ``subtitles`` (fallback: timed drawtext).
 6. Mix narration/music/sfx with per-clip gain, sidechain ducking under
@@ -20,6 +21,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 import urllib.request
@@ -45,8 +47,10 @@ from app.tools.render.ffmpeg_assembler import (
 
 logger = logging.getLogger("chronocut.edl.compiler")
 
-_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tiff", ".tif"}
-_AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".opus"}
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".jpe", ".jfif", ".bmp", ".dib", ".gif",
+               ".webp", ".tiff", ".tif", ".avif", ".heic", ".heif", ".jp2", ".tga"}
+_AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".oga", ".flac", ".opus",
+               ".wma", ".aiff", ".aif", ".au", ".amr", ".mka"}
 
 _MIN_CLIP = 0.06
 _SEGMENT_SUFFIX = ".seg.mp4"
@@ -375,10 +379,10 @@ def concatenate_edl_timeline(
     """Assemble absolute-timeline segments into one silent video.
 
     Segments are on the project timeline; the timeline may have gaps. Where
-    clips actually meet, an xfade transition is applied; elsewhere we simply
-    concatenate (the xfade chain requires contiguous segments, so gaps are
-    bridged with black slivers and transitions that would cross a gap fall
-    back to a straight cut).
+    clips actually meet, the junction's transition is baked into both sides
+    as a dip through black (memory-lean: one decoder at a time); elsewhere
+    segments are concatenated directly. Gaps are bridged with black slivers
+    and transitions that would cross a gap fall back to a straight cut.
     """
     try:
         segments = [(s, e, p) for (s, e, p) in segments if valid_media(p)]
@@ -431,37 +435,51 @@ def concatenate_edl_timeline(
 
         has_real_transitions = any(d > 0.01 for _, (t, d) in junc_infos) if junc_infos else False
         if has_real_transitions:
-            # Chained xfade cannot express this timeline: xfade overlaps its
-            # inputs, compressing the output and desyncing captions/audio that
-            # are keyed to absolute EDL times — and a zero-length "cut"
-            # junction lands its offset exactly at the previous input's EOF,
-            # silently ending the render early. Instead, composite every
-            # segment onto a black canvas at its absolute start; real
-            # junctions fade the incoming segment in over the picture below.
-            parts: List[str] = [
-                f"color=black:size={profile_w}x{profile_h}:rate={fps}:duration={total:.3f}[base]"]
-            prev_label = "[base]"
+            # Crossfades render as dips through black: each junction's fade is
+            # baked into the two touching segments (one ffmpeg pass per
+            # segment, a single decoder alive at a time), then everything is
+            # joined with the concat demuxer. This keeps absolute EDL timing
+            # intact and peak memory flat — a multi-input composite graph
+            # holds one live decoder per segment and OOM-kills 512MB
+            # containers mid-pipeline.
+            faded_dir = out_path + ".faded"
+            os.makedirs(faded_dir, exist_ok=True)
+            assembly: List[str] = []
             for i, (s, e, p) in enumerate(contiguous):
-                _, tlen = junc_infos[i - 1][1] if i > 0 else ("fade", 0.0)
-                chain = f"[{i}:v]setpts=PTS-STARTPTS+{s:.3f}/TB,format=rgba"
-                if tlen > 0.01:
-                    chain += f",fade=in:st={s:.3f}:d={tlen:.3f}:alpha=1"
-                parts.append(f"{chain}[fi{i}]")
-                out_label = f"[cmp{i}]"
-                parts.append(f"{prev_label}[fi{i}]overlay=eof_action=pass{out_label}")
-                prev_label = out_label
-            parts.append(f"{prev_label}format=yuv420p[out]")
-            cmd = ["ffmpeg", "-y", "-threads", "1"]
-            for (_, _, p) in contiguous:
-                cmd += ["-i", p]
-            cmd += ["-filter_complex", ";".join(parts), "-map", "[out]", "-an",
-                    "-c:v", "libx264", "-preset", "ultrafast",
-                    "-r", str(fps),
-                    "-t", f"{total:.3f}", out_path]
-            ok, _ = run_ffmpeg(cmd, timeout=timeout)
-            if ok and valid_media(out_path):
-                return True
-            logger.warning("composite concat failed; falling back to concat demuxer")
+                tlen_in = junc_infos[i - 1][1][1] if i > 0 else 0.0
+                tlen_out = junc_infos[i][1][1] if i < len(junc_infos) else 0.0
+                seg_dur = e - s
+                if tlen_in > 0.01 or tlen_out > 0.01:
+                    filters = []
+                    if tlen_in > 0.01:
+                        filters.append(f"fade=in:st=0:d={min(tlen_in, seg_dur):.3f}")
+                    if tlen_out > 0.01:
+                        st = max(0.0, seg_dur - min(tlen_out, seg_dur))
+                        filters.append(f"fade=out:st={st:.3f}:d={min(tlen_out, seg_dur):.3f}")
+                    faded_path = os.path.join(faded_dir, f"seg{i:03d}.mp4")
+                    cmd = ["ffmpeg", "-y", "-threads", "1", "-i", p,
+                           "-vf", ",".join(filters),
+                           "-c:v", "libx264", "-preset", "ultrafast",
+                           "-pix_fmt", "yuv420p", "-r", str(fps), "-an", faded_path]
+                    ok, _ = run_ffmpeg(cmd, timeout=timeout)
+                    if ok and valid_media(faded_path):
+                        assembly.append(faded_path)
+                        continue
+                    logger.warning("fade pre-pass failed for %s; using raw segment", p)
+                assembly.append(p)
+            if assembly:
+                list_path = out_path + ".concat.txt"
+                with open(list_path, "w", encoding="utf-8") as f:
+                    for p in assembly:
+                        f.write(f"file '{os.path.abspath(p)}'\n")
+                cmd = ["ffmpeg", "-y", "-threads", "1", "-f", "concat", "-safe", "0", "-i", list_path,
+                       "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                       "-r", str(fps), "-an", out_path]
+                ok, _ = run_ffmpeg(cmd, timeout=timeout)
+                if ok and valid_media(out_path):
+                    shutil.rmtree(faded_dir, ignore_errors=True)
+                    return True
+                logger.warning("faded concat failed; falling back to plain concat")
 
         # concat demuxer fallback: hard cuts, minimal RAM
         list_path = out_path + ".concat.txt"

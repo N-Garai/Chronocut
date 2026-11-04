@@ -40,13 +40,10 @@ body {
   font-family: 'Space Grotesk', sans-serif;
 }
 
-@media (pointer: fine) {
-  body { cursor: none !important; }
-}
-
-@media (max-width: 768px) {
-  body { cursor: auto !important; }
-}
+/* NOTE: no global `cursor: none` here. CustomCursor injects that rule
+   itself on the pages that mount it (Landing, Studio); a global rule left
+   the timeline workspace (which uses the native cursor) with NO pointer
+   at all outside cursor-* widgets. */
 
 ::selection {
   background: var(--amber);

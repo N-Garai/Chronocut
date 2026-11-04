@@ -23,6 +23,18 @@ from app.job_runner import runner
 
 logger = logging.getLogger("chronocut.main")
 
+# Upload classification. Anything ffmpeg can decode belongs in these sets;
+# unknown extensions fall through to document ingestion and fold into the
+# brief instead of being rejected.
+_AUDIO_EXT = {"mp3", "wav", "m4a", "aac", "ogg", "oga", "flac", "wma", "opus",
+              "aiff", "aif", "au", "amr", "mka"}
+_PHOTO_EXT = {"jpg", "jpeg", "jpe", "jfif", "png", "webp", "heic", "heif",
+              "gif", "bmp", "dib", "tiff", "tif", "svg", "avif", "jp2", "pnm",
+              "ppm", "pgm", "tga"}
+_VIDEO_EXT = {"mp4", "m4v", "mov", "avi", "mkv", "webm", "mpg", "mpeg", "wmv",
+              "flv", "f4v", "3gp", "3g2", "ts", "mts", "m2ts", "ogv", "vob",
+              "asf", "divx"}
+
 
 def _setup_logging():
     """Persist server logs under the centralized tmp root (CHRONOCUT_TMP_DIR),
@@ -301,11 +313,7 @@ async def create_job(
     else:
         # from_media (default) — accepts a raw media[] upload (preferred) or a
         # ZIP of raw media (kept for compatibility with the original flow).
-        _AUDIO_EXT = {"mp3", "wav", "m4a", "aac", "ogg", "flac", "wma", "opus", "aiff", "au"}
-        _PHOTO_EXT = {"jpg", "jpeg", "png", "webp", "heic", "gif", "bmp", "tiff", "tif", "svg", "avif"}
-        _VIDEO_EXT = {"mp4", "mov", "avi", "mkv", "webm", "m4v", "mpg", "mpeg"}
         # Everything else is ingested as a document and folded into the brief.
-
         def _category(fname: str) -> Optional[str]:
             ext = (fname.split(".")[-1] or "").lower()
             if ext in _AUDIO_EXT:
@@ -382,11 +390,12 @@ async def create_job(
                     for fname in files:
                         ext = fname.split(".")[-1].lower()
                         full = os.path.join(root, fname)
-                        if ext in {"mp3", "wav", "m4a", "aac", "ogg", "flac", "wma", "opus", "aiff", "au"}:
+                        cat = _category(fname)
+                        if cat == "audio":
                             audio_files.append(full)
-                        elif ext in {"jpg", "jpeg", "png", "webp", "heic", "gif", "bmp", "tiff", "tif", "svg", "avif"}:
+                        elif cat == "photo":
                             photo_files.append(full)
-                        elif ext in {"mp4", "mov", "avi", "mkv", "webm", "m4v", "mpg", "mpeg"}:
+                        elif cat == "video":
                             video_files.append(full)
                         elif ext and ext != "zip":
                             document_files.append(full)

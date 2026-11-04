@@ -42,6 +42,11 @@ export function useTimeline(jobId) {
   const inflight = useRef(false)
   const pendingOps = useRef([])
   const dirtyRef = useRef(false)
+  // synchronous mirrors of edl/revision — execute() must apply ops against the
+  // latest state even when React defers queued setState updaters (batched
+  // ticks right after an SSE refetch would otherwise silently drop the op)
+  const edlRef = useRef(null)
+  const revisionRef = useRef(null)
   // optimistic revision while in flight is not tracked; server echo wins
   const dirty = saveStatus === 'pending' || saveStatus === 'saving'
   dirtyRef.current = dirty
@@ -56,6 +61,8 @@ export function useTimeline(jobId) {
   }, [])
 
   const setBase = useCallback((nextEdl, nextRevision, { resetHistory = false, record = false } = {}) => {
+    edlRef.current = nextEdl
+    revisionRef.current = nextRevision
     setEdl(nextEdl)
     setRevision(nextRevision)
     if (record) pushHistory({ edl: nextEdl, revision: nextRevision })
@@ -69,6 +76,8 @@ export function useTimeline(jobId) {
     if (!jobId) return null
     try {
       const data = await getEdl(jobId)
+      edlRef.current = data.edl
+      revisionRef.current = data.revision
       setEdl((prev) => {
         if (prev) setDiff({ ...diffRevisions(prev, data.edl), at: Date.now() })
         return data.edl
@@ -130,30 +139,25 @@ export function useTimeline(jobId) {
   // ---------------- command execution ----------------
   const execute = useCallback((ops, { note = 'edit' } = {}) => {
     if (!Array.isArray(ops) || ops.length === 0) return false
-    let result = null
-    let errorName = null
-    setEdl((current) => {
-      try {
-        const next = applyBatch(current, ops)
-        if (next === current) return current
-        result = next
-        return next
-      } catch (e) {
-        errorName = String(e?.message || e)
-        return current
-      }
-    })
-    if (errorName) { setLastError(errorName); return false }
-    if (result) {
-      const nextRevision = (revision ?? 1) + 1
-      setRevision(nextRevision)
-      pushHistory({ edl: result, revision: nextRevision })
-      pendingOps.current.push(...ops)
-      setSaveStatus('pending')
-      scheduleSave()
+    if (!edlRef.current) return false
+    let next
+    try {
+      next = applyBatch(edlRef.current, ops)
+    } catch (e) {
+      setLastError(String(e?.message || e))
+      return false
     }
-    return !!result
-  }, [revision, pushHistory, scheduleSave])
+    if (!next || next === edlRef.current) return false
+    edlRef.current = next
+    revisionRef.current = (revisionRef.current ?? 1) + 1
+    setEdl(next)
+    setRevision(revisionRef.current)
+    pushHistory({ edl: next, revision: revisionRef.current })
+    pendingOps.current.push(...ops)
+    setSaveStatus('pending')
+    scheduleSave()
+    return true
+  }, [pushHistory, scheduleSave])
 
   // ---------------- undo / redo ----------------
   const applyHistory = useCallback(async (dir) => {
@@ -161,6 +165,8 @@ export function useTimeline(jobId) {
     const target = historyRef.current[pos]
     if (!target) return false
     historyPos.current = pos
+    edlRef.current = target.edl
+    revisionRef.current = target.revision
     setEdl(target.edl)
     setRevision(target.revision)
     setSaveStatus('saved')

@@ -57,11 +57,15 @@ def _transition(value: Any) -> Optional[str]:
 
 def _classify(file_path: str) -> str:
     ext = os.path.splitext(file_path or "")[1].lower()
-    if ext in {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tiff", ".tif"}:
+    if ext in {".png", ".jpg", ".jpeg", ".jpe", ".jfif", ".bmp", ".gif", ".webp",
+               ".tiff", ".tif", ".svg", ".avif", ".heic", ".heif", ".jp2", ".tga"}:
         return "image"
-    if ext in {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"}:
+    if ext in {".mp4", ".m4v", ".mov", ".webm", ".mkv", ".avi", ".wmv", ".flv",
+               ".f4v", ".3gp", ".3g2", ".ts", ".mts", ".m2ts", ".ogv", ".mpg",
+               ".mpeg", ".vob", ".asf", ".divx"}:
         return "video"
-    if ext in {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".opus"}:
+    if ext in {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".oga", ".flac", ".opus",
+               ".wma", ".aiff", ".aif", ".au", ".amr", ".mka"}:
         return "audio"
     return "image"
 

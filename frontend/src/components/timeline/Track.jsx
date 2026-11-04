@@ -10,7 +10,7 @@ export default function Track({
   track, pps, selectedClipIds, diff, widthPx, waveforms, thumbs, readOnly,
   onClipSelect, onTrimPreview, onTrimCommit, onDragPreview, onDragCommit,
 }) {
-  const heightOf = track.type === 'video' ? 'h-14' : track.type === 'caption' ? 'h-9' : 'h-10'
+  const heightOf = track.type === 'video' ? 'h-16' : track.type === 'caption' ? 'h-7' : 'h-12'
 
   return (
     <div className={`relative flex ${heightOf} border-b border-white/[0.06]`} data-track={track.id}>
