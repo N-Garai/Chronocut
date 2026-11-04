@@ -43,6 +43,11 @@ from app.services.firestore_service import JobStateService
 
 MAX_CONCURRENT_JOBS = int(os.getenv("CHRONOCUT_MAX_CONCURRENT_JOBS", "1"))
 STALE_AFTER_MIN = int(os.getenv("CHRONOCUT_STALE_MIN", "5"))
+# Recovery requeues per job (stale PROCESSING sweep + crashed-FAILED recovery).
+# Unbounded requeueing turns a deterministically crashing job into a zombie that
+# occupies the only job slot forever (max concurrent jobs is 1); after this many
+# recovery attempts the job stays FAILED with the last error.
+MAX_JOB_REQUEUES = int(os.getenv("CHRONOCUT_MAX_JOB_REQUEUES", "3"))
 # Optional per-job address-space cap (MB). DISABLED by default (0): ffmpeg
 # subprocesses inherit this rlimit and HD encoding routinely needs >1.5 GB of
 # virtual address space, so capping it silently OOM-killed ffmpeg and produced
@@ -187,14 +192,31 @@ class JobRunner:
                     msg = (j.get("error_log") or {}).get("message", "")
                     failed_at = _parse_dt(j.get("updated_at"))
                     if err == "worker" and failed_at and (now - failed_at) > timedelta(minutes=10):
-                        JobStateService.update_job(jid, {
-                            "status": "QUEUED", "claimed_at": None, "claimed_by": None,
-                            "error_log": {},
-                        })
-                        await self._queue.put(jid)
-                        logger.warning(f"re-queued crashed FAILED job {jid}: {msg}")
+                        await self._requeue_with_limit(j, jid, f"crashed: {msg}")
         except Exception as e:  # pragma: no cover
             logger.warning(f"job recovery skipped: {e}")
+
+    async def _requeue_with_limit(self, j: dict, jid: str, reason: str) -> bool:
+        """Requeue a dead job unless it has already burned its recovery budget.
+
+        Returns True when the job was requeued. Past MAX_JOB_REQUEUES the job
+        stays FAILED with the last error instead of looping forever and
+        blocking the single job slot.
+        """
+        count = int(j.get("requeue_count") or 0)
+        if count >= MAX_JOB_REQUEUES:
+            logger.error(
+                f"job {jid} not requeued again ({count}/{MAX_JOB_REQUEUES} recovery "
+                f"requeues used): {reason}"
+            )
+            return False
+        JobStateService.update_job(jid, {
+            "status": "QUEUED", "claimed_at": None, "claimed_by": None,
+            "error_log": {}, "requeue_count": count + 1,
+        })
+        await self._queue.put(jid)
+        logger.warning(f"re-queued job {jid} (requeue {count + 1}/{MAX_JOB_REQUEUES}): {reason}")
+        return True
 
     async def _requeue_if_stale(self, j: dict, now: datetime) -> bool:
         """Requeue a PROCESSING job whose worker stopped heartbeating.
@@ -208,11 +230,7 @@ class JobRunner:
         last = _parse_dt(j.get("heartbeat_at")) or _parse_dt(j.get("claimed_at"))
         if last and (now - last) <= timedelta(minutes=STALE_AFTER_MIN):
             return False
-        JobStateService.update_job(jid, {
-            "status": "QUEUED", "claimed_at": None, "claimed_by": None,
-        })
-        await self._queue.put(jid)
-        logger.warning(f"reclaimed stale PROCESSING job {jid} (last beat {last})")
+        await self._requeue_with_limit(j, jid, "stale PROCESSING (no heartbeat)")
         return True
 
     async def _sweep_loop(self) -> None:

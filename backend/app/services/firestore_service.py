@@ -131,6 +131,16 @@ def get_firestore_client():
                 "/etc/secrets/service_account.json",
                 "/run/secrets/service_account.json",
             ])
+            # Repo-root copies (the file the developer actually maintains) —
+            # both spellings, since local setups use either hyphen or
+            # underscore. os.path resolution works on every platform, unlike
+            # the "/etc/secrets" mounts which only exist on Render.
+            _repo_root = os.path.dirname(os.path.dirname(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+            possible_paths.extend([
+                os.path.join(_repo_root, "service-account.json"),
+                os.path.join(_repo_root, "service_account.json"),
+            ])
             for path in possible_paths:
                 if path and os.path.exists(path):
                     sa_path = path

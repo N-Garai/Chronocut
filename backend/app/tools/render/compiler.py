@@ -3,6 +3,7 @@ import asyncio
 import logging
 import tempfile
 import subprocess
+from dataclasses import replace
 from typing import Dict, List, Optional
 
 logger = logging.getLogger("chronocut.tools.render")
@@ -188,6 +189,34 @@ def _concat_narration(narration_files: List[str], out_path: str) -> Optional[str
     return None
 
 
+def _clamp_profile_to_memory(profile: RenderProfile, job_id: Optional[str], pname: str) -> RenderProfile:
+    """Scale the render profile down when the host can't hold a full-resolution
+    x264 encode alongside the API process. On a 512MB free-tier container the
+    720p pipeline render OOM-kills the instance mid-job and the sweep requeues
+    the same job into the same death loop (UI stuck at 88%). Rendering at <=480p
+    lets those containers complete; bigger hosts keep their original profile.
+    """
+    try:
+        import psutil  # type: ignore
+        avail_mb = psutil.virtual_memory().available / (1024 * 1024)
+    except Exception:
+        # Unknown memory fails toward the safe (small) path for the same reason
+        # as concatenate_with_transitions: assuming "plenty" OOMs the container.
+        avail_mb = 0.0
+    if avail_mb >= 700:
+        return profile
+    longest = max(profile.width, profile.height)
+    scale = 480.0 / longest
+    w = max(2, int(profile.width * scale) // 2 * 2)
+    h = max(2, int(profile.height * scale) // 2 * 2)
+    logger.warning(
+        f"low memory ({avail_mb:.0f} MB available): rendering {pname} at {w}x{h} "
+        f"instead of {profile.width}x{profile.height}"
+    )
+    _emit(job_id, 10, f"Low memory ({avail_mb:.0f} MB): rendering {pname} at {w}x{h}")
+    return replace(profile, width=w, height=h, bitrate="2M", crf=max(profile.crf, 24))
+
+
 async def render_job(
     storyboard: List[Dict],
     assets_dir: str,
@@ -205,7 +234,7 @@ async def render_job(
     _emit(job_id, 5, f"Starting render for {len(profiles)} profile(s)")
 
     for pi, pname in enumerate(profiles):
-        profile = get_profile(pname)
+        profile = _clamp_profile_to_memory(get_profile(pname), job_id, pname)
         out_path = os.path.join(output_root, f"{pname}.mp4")
         try:
             tmp = tempfile.mkdtemp(prefix=f"cc_{pname}_")

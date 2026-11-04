@@ -347,7 +347,10 @@ def concatenate_with_transitions(
             import psutil  # type: ignore
             avail_mb = psutil.virtual_memory().available / (1024 * 1024)
         except Exception:
-            avail_mb = 2048.0
+            # Unknown memory must fail toward the lean path: assuming "plenty"
+            # on a host without psutil would pick the multi-input xfade graph
+            # and OOM small containers mid-render.
+            avail_mb = 0.0
         low_memory = avail_mb < 1200
 
         if not low_memory:

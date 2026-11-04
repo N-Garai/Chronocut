@@ -1,4 +1,6 @@
-from pydantic_settings import BaseSettings
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 from typing import Optional, List, Tuple
 
@@ -30,6 +32,9 @@ def llm_badge_for(provider_name: str, settings: "Settings") -> Tuple[str, str]:
     if name == "local":
         return ("local", settings.LOCAL_LLM_MODEL or settings.META_TEXT_MODEL or "muse-spark-1.3")
     return ("meta", settings.META_TEXT_MODEL)
+
+
+_REPO_ROOT_ENV = str(Path(__file__).resolve().parents[2] / ".env")
 
 
 class Settings(BaseSettings):
@@ -182,9 +187,14 @@ class Settings(BaseSettings):
     VIDEO_GEN_MAX_PER_JOB: int = Field(default=3)
     VIDEO_GEN_TIMEOUT_SECONDS: int = Field(default=900)
 
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
+    # Load backend/.env first, then the repo-root .env; later files win
+    # conflicts, so the root .env (the one actually maintained/edited) overrides
+    # any stale backend-local copy. uvicorn runs from backend/, where a bare
+    # ".env" would otherwise never see the root credentials.
+    model_config = SettingsConfigDict(
+        env_file=(".env", _REPO_ROOT_ENV),
+        extra="ignore",
+    )
 
     @property
     def provider_api_key(self) -> Optional[str]:
