@@ -116,7 +116,7 @@ docs/                  deep-dive documentation + rendered diagrams
 
 ### Prerequisites
 
-- Python 3.11+ and FFmpeg on the backend host. On Windows, a bundled `ffmpeg.exe` under `backend/bin` is picked up automatically as long as the app package is imported through `python -m uvicorn` (we prepend `backend/bin` to `PATH` in `app/__init__.py`). An `ffprobe` on `PATH` is still required for media probing.
+- Python 3.11+ and FFmpeg on the backend host. On Windows, a bundled `ffmpeg.exe` under `backend/bin` is picked up automatically as long as the app package is imported through `python -m uvicorn` (we prepend `backend/bin` to `PATH` in `app/__init__.py`). An `ffprobe` on `PATH` is recommended for media probing (the review tool falls back to `ffmpeg -i` without it; macOS/Linux ffmpeg installs include ffprobe).
 - Node.js 18+ for the frontend.
 - Optional but recommended: a first-party Meta Model API key (see *Models in use* below). A Pexels key upgrades the stock-footage tier.
 
@@ -127,7 +127,7 @@ cd backend
 python -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env                 # then edit .env
+cp .env.example .env                 # Windows PowerShell: Copy-Item .env.example .env — then edit .env
 python -m uvicorn app.main:app --reload --port 8000
 ```
 
@@ -247,6 +247,7 @@ Key environment variables (see `backend/.env.example` for the full annotated set
 | `MAX_ACTIVE_JOBS` | Worker concurrency cap (default 3) |
 | `CHRONOCUT_RESUME_STALE_JOBS` | `0` disables the startup re-queue sweep for stale jobs |
 | `CHRONOCUT_DISABLE_FIRESTORE` | `1` forces the local JSON store even when Firestore is configured |
+| `CHRONOCUT_MEMORY_CLAMP_MB` | Free-RAM threshold (default 700) below which renders are downsized — raise on a memory-spiky laptop |
 | `CHRONOCUT_TMP_DIR` | Override the working/temp directory root |
 
 State is stored in Firestore when configured, with an automatic local-JSON fallback so a fresh clone works with zero external accounts. Transcripts, EDL revisions and render records all carry retention-aware cleanup so free-tier quotas are respected.

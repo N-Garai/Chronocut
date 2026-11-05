@@ -7,7 +7,7 @@ Everything we need to run ChronoCut end to end on one machine: the API, the brow
 | Requirement | Notes |
 |---|---|
 | Python 3.11+ | `python -m uvicorn app.main:app` is the launch path |
-| FFmpeg + ffprobe | The render path shells out by bare name. On Windows, `backend/bin/ffmpeg.exe` is picked up automatically (we prepend that folder to `PATH` in `app/__init__.py`, so the launch must go through Python, not a direct binary call). `ffprobe` still needs to be on `PATH` for media probing. |
+| FFmpeg + ffprobe | The render path shells out by bare name. On Windows, `backend/bin/ffmpeg.exe` is picked up automatically (we prepend that folder to `PATH` in `app/__init__.py`, so the launch must go through Python, not a direct binary call). `ffprobe` on `PATH` is recommended for media probing; where it's missing the review tool falls back to `ffmpeg -i` (macOS/Linux installs of ffmpeg include ffprobe automatically). |
 | Node.js 18+ | Frontend dev server and build |
 | ~4 GB free RAM | Keeps the deterministic pipeline comfortable; the render path self-degrades on tighter hosts |
 
@@ -45,6 +45,7 @@ Useful local-mode switches (all optional):
 |---|---|
 | `CHRONOCUT_RESUME_STALE_JOBS=0` | Skips the startup sweep that re-queues stale jobs — recommended for a demo on a shared local store |
 | `CHRONOCUT_DISABLE_FIRESTORE=1` | Forces the local JSON store even with Firestore configured — useful after the daily free quota is gone |
+| `CHRONOCUT_MEMORY_CLAMP_MB=300` | Raises/lowers the free-RAM threshold that downsizes renders (default 700 MB); raise it on a laptop whose browser spikes memory |
 | `CHRONOCUT_TMP_DIR=path` | Redirects the scratch/media root |
 | `IMAGE_GEN_PROVIDER=muse` | Turns on generated B-roll stills (budget-capped: 6 per job, 60 per day) |
 
@@ -59,6 +60,35 @@ npm run dev        # http://localhost:5173
 ```
 
 Routes: `/` (landing), `/studio` (intake), `/studio/:jobId/timeline` (editor). The dev server talks to `http://localhost:8000` by default; set `VITE_API_BASE_URL` when the API lives elsewhere.
+
+### Alternative: run the backend in Docker
+
+Instead of Step 1 (Python venv), run the API in a container — it ships its own ffmpeg/ffprobe, so nothing else to install. Works the same on Linux, macOS and Windows (with Docker Desktop). The repo has **two Dockerfiles**:
+
+| Image | Dockerfile | What it is |
+|---|---|---|
+| Lean API image (recommended) | `backend/Dockerfile` | The deployment image — slim runtime, only `app/`, exactly what Render runs |
+| Full dev image | `Dockerfile` (repo root) | Path-A dev image — same API with extra tooling/fonts; needs the repo root as build context |
+
+**Lean image (recommended for local use):**
+
+```bash
+docker build -t chronocut-api ./backend
+docker run --rm -p 8000:8000 --env-file .env --name chronocut-api chronocut-api
+```
+
+**Full dev image (only if you want the dev tooling):**
+
+```bash
+docker build -t chronocut-api-dev -f Dockerfile .
+docker run --rm -p 8000:8000 --env-file .env --name chronocut-api-dev chronocut-api-dev
+```
+
+Either way, the frontend still runs on the host per Step 2 and talks to `localhost:8000` as usual. Notes:
+
+- `--env-file .env` is the repo-root `.env`; omit it to run keyless (the pipeline degrades to deterministic fallbacks and the local JSON store).
+- Data (job state, rendered videos) lives inside the container and is discarded with it unless you mount a volume. The cleanest way is to pin the state root and mount it: `docker run --rm -p 8000:8000 --env-file .env -e CHRONOCUT_TMP_DIR=/data -v chronocut-data:/data --name chronocut-api chronocut-api` (without it, state defaults to the container's `/tmp`).
+- Health check: `curl http://localhost:8000/health` should return the provider capability snapshot once the container is up.
 
 ## Step 3 — Run a job
 

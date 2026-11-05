@@ -42,10 +42,7 @@ npm install @mermaid-js/mermaid-cli   # local, or: npm i -g @mermaid-js/mermaid-
 Rebuild any diagram after editing its `.mmd` source:
 
 ```bash
-mmdc \
-  -i code/01-system-architecture.mmd \
-  -o diagram/01-system-architecture.png \
-  -b white -s 2 --size 2400
+mmdc -i code/01-system-architecture.mmd -o diagram/01-system-architecture.png -b white -s 2 --size 2400
 ```
 
 (`-b white` background, `-s 2` two-x scale for crisp text, `--size 2400`
